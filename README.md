@@ -11,10 +11,12 @@ A Go application for installing bootc compatible containers to physical disks.
 - 🔍 **Disk Discovery**: List and inspect available physical disks
 - ✅ **Validation**: Verify disks are suitable for installation
 - 🚀 **Automated Installation**: Complete installation workflow with safety checks
+- � **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
 - 🔧 **Kernel Arguments**: Support for custom kernel arguments
 - 🏷️ **Multiple Device Types**: Supports SATA (sd*), NVMe (nvme*), virtio (vd\*), and MMC devices
 - 🛡️ **Safety Features**: Confirmation prompts and dry-run mode
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
+- 💾 **Configuration Persistence**: Stores image reference for easy updates
 
 ## Prerequisites
 
@@ -108,7 +110,7 @@ phukit validate -d /dev/disk/by-id/ata-Samsung_SSD_850
 
 ### Install to Disk
 
-```bash
+````bash
 # Basic installation
 phukit install \
   --image quay.io/centos-bootc/centos-bootc:stream9 \
@@ -132,7 +134,35 @@ phukit install \
   --image quay.io/example/image:latest \
   --device /dev/sda \
   --dry-run
-```
+```Update System
+
+The A/B update system allows you to safely update your system by installing to an inactive root partition:
+
+```bash
+# Update to latest version of the installed image
+phukit update --device /dev/sda
+
+# Update to a specific image
+phukit update \
+  --image quay.io/my-org/my-image:v2.0 \
+  --device /dev/sda
+
+# Skip pulling (use already pulled image)
+phukit update \
+  --image localhost/my-image \
+  --device /dev/sda \
+  --skip-pull
+
+# Add custom kernel arguments for the new system
+phukit update \
+  --device /dev/sda \
+  --karg console=ttyS0 \
+  --karg debug
+````
+
+After update, reboot to activate the new system. The previous version remains available in the boot menu for rollback.
+
+###
 
 ### Global Flags
 
@@ -142,19 +172,52 @@ phukit install --image IMAGE --device DEVICE -v
 
 # Dry run mode (no actual changes)
 phukit install --image IMAGE --device DEVICE --dry-run
+`phukit` performs a native installation without requiring the `bootc` command. The system is designed with A/B partitioning for safe, atomic updates.
 
-# Use custom config file
-phukit --config /path/to/config.yaml install --image IMAGE --device DEVICE
-```
+### A/B Partitioning Scheme
 
-## Configuration
+`phukit` creates a GPT partition table with dual root partitions for atomic updates:
 
-You can create a configuration file at `~/.phukit.yaml` to set default values:
+1. **EFI System Partition** (2GB, FAT32): UEFI boot files and bootloader
+2. **Boot Partition** (1GB, ext4): Shared kernel and initramfs
+3. **Root Partition 1** (20GB, ext4): First root filesystem (OS A)
+4. **Root Partition 2** (20GB, ext4): Second root filesystem (OS B)
+5. **Var Partition** (remaining space, ext4): Shared `/var` for both systems
 
-```yaml
-# Enable verbose output by default
-verbose: false
+This layout enables:
+- **Atomic Updates**: Install new version to inactive partition without affecting running system
+- **Safe Rollback**: Previous system remains bootable in case of issues
+- **Shared Data**: `/var` partition shared between both systems for persistent data
+- **Zero Downtime**: Switch between versions with a simple reboot
 
+### Installation Process
+
+The initial installation follows these steps:
+
+1. **Prerequisites Check**: Verifies required tools (podman, sgdisk, mkfs, grub) are available
+2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted)
+3. **Image Pull**: Downloads the container image using podman (unless --skip-pull is used)
+4. **Confirmation**: Prompts user to confirm data destruction
+5. **Disk Wipe**: Removes existing partition tables and filesystem signatures
+6. **Partitioning**: Creates the 5-partition GPT layout described above
+7. **Formatting**: Formats all partitions (FAT32 for EFI, ext4 for others)
+8. **Extraction**: Extracts container filesystem to Root Partition 1 (active)
+9. **Configuration**: Creates `/etc/fstab`, sets up system directories, writes `/etc/phukit/config.json`
+10. **Bootloader Installation**: Installs and configures GRUB2 or systemd-boot
+
+### Update Process
+
+Updates use the inactive root partition for safe atomic updates:
+
+1. **Active Detection**: Determines which root partition is currently booted (via `/proc/cmdline`)
+2. **Target Selection**: Selects the inactive partition as update target
+3. **Image Pull**: Downloads the new container image (unless --skip-pull is used)
+4. **Extraction**: Extracts new filesystem to inactive root partition
+5. **Bootloader Update**: Updates GRUB configuration to boot from new partition by default
+6. **Menu Creation**: Generates dual boot menu with both "Updated" and "Previous" options
+7. **Config Update**: Updates `/etc/phukit/config.json` with new image reference
+
+After reboot, the system boots from the new partition. The old partition remains available for rollback.
 # Enable dry-run mode by default
 dry-run: false
 # Default image to use
@@ -168,10 +231,38 @@ dry-run: false
 
 See [.phukit.yaml.example](.phukit.yaml.example) for a complete example.
 
-## How It Works
+## How It Works for the active partition
 
-The installation process follows these steps:
-required tools (podman, sgdisk, mkfs, grub) are available 2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted) 3. **Image Pull**: Downloads the container image using podman (unless --skip-pull is used) 4. **Confirmation**: Prompts user to confirm data destruction 5. **Disk Wipe**: Removes existing partition tables and filesystem signatures 6. **Partitioning**: Creates GPT partition table with EFI, boot, and root partitions 7. **Formatting**: Formats partitions (FAT32 for EFI, ext4 for boot and root) 8. **Extraction**: Extracts container filesystem to mounted partitions 9. **Configuration**: Creates /etc/fstab and sets up system directories
+- Custom kernel arguments (if specified)
+- Generated initramfs references
+- Dual boot menu entries (after updates) for both active and previous systems
+
+## System Configuration
+
+After installation, `phukit` writes a configuration file to `/etc/phukit/config.json` that stores:
+
+- Container image reference used for installation
+- Device path
+- Installation timestamp
+- Custom kernel arguments
+- Bootloader type
+
+This configuration is automatically read during updates, so you don't need to specify the image reference again - `phukit` will simply pull the latest tag of the originally installed image.
+
+```json
+{
+  "image_ref": "quay.io/example/bootc-image:latest",
+  "device": "/dev/sda",
+  "install_date": "2025-12-16T10:30:00Z",
+  "kernel_args": ["console=ttyS0", "quiet"],
+  "bootloader_type": "grub2"
+}
+```
+
+## Troubleshooting
+
+### "red tools (podman, sgdisk, mkfs, grub) are available 2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted) 3. **Image Pull**: Downloads the container image using podman (unless --skip-pull is used) 4. **Confirmation**: Prompts user to confirm data destruction 5. **Disk Wipe**: Removes existing partition tables and filesystem signatures 6. **Partitioning**: Creates GPT partition table with EFI, boot, and root partitions 7. **Formatting**: Formats partitions (FAT32 for EFI, ext4 for boot and root) 8. **Extraction**: Extracts container filesystem to mounted partitions 9. **Configuration**: Creates /etc/fstab and sets up system directories
+
 10.Installation Details
 
 `phukit` performs a native installation without requiring the `bootc` command:
@@ -233,7 +324,13 @@ This ensures the bootc installer has all necessary permissions to configure the 
 ## Safety Features
 
 - **Unmounted Check**: Refuses to install if any partition is mounted
-- **Size Validation**: Ensures disk has minimum 10GB space
+- \*Documentation
+
+- [A/B Updates](docs/AB-UPDATES.md) - Detailed documentation on the A/B update system
+- [Implementation Details](IMPLEMENTATION.md) - Technical implementation details
+
+## \*Size Validation\*\*: Ensures disk has minimum 10GB space
+
 - **Confirmation Prompt**: Requires typing "yes" before wiping disk
 - **Dry Run Mode**: Test operations without making changes
 - **Verbose Logging**: Track exactly what's happening

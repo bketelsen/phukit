@@ -21,18 +21,21 @@ var updateCmd = &cobra.Command{
 	Long: `Update the system by installing a new container image to the inactive root partition.
 
 This command performs an A/B system update:
-  1. Detects which root partition is currently active
-  2. Pulls the new container image (unless --skip-pull is specified)
-  3. Extracts the new filesystem to the inactive root partition
-  4. Updates the bootloader to boot from the new partition
-  5. Keeps the old partition as a rollback option
+  1. Auto-detects the boot device (or use --device to override)
+  2. Detects which root partition is currently active
+  3. Pulls the new container image (unless --skip-pull is specified)
+  4. Extracts the new filesystem to the inactive root partition
+  5. Updates the bootloader to boot from the new partition
+  6. Keeps the old partition as a rollback option
 
 After update, reboot to activate the new system. The previous system remains
 available in the boot menu for rollback if needed.
 
 Example:
-  phukit update --image quay.io/example/myimage:latest --device /dev/sda
-  phukit update --image localhost/myimage --device /dev/nvme0n1 --skip-pull`,
+  phukit update
+  phukit update --image quay.io/example/myimage:v2.0
+  phukit update --skip-pull
+  phukit update --device /dev/sda  # Override auto-detection`,
 	RunE: runUpdate,
 }
 
@@ -40,25 +43,36 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 
 	updateCmd.Flags().StringVarP(&updateImage, "image", "i", "", "Container image reference (uses saved config if not specified)")
-	updateCmd.Flags().StringVarP(&updateDevice, "device", "d", "", "Target disk device (required)")
+	updateCmd.Flags().StringVarP(&updateDevice, "device", "d", "", "Target disk device (auto-detected if not specified)")
 	updateCmd.Flags().BoolVar(&updateSkipPull, "skip-pull", false, "Skip pulling the image (use already pulled image)")
 	updateCmd.Flags().StringArrayVarP(&updateKernelArgs, "karg", "k", []string{}, "Kernel argument to pass (can be specified multiple times)")
-
-	updateCmd.MarkFlagRequired("device")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	dryRun := viper.GetBool("dry-run")
 
-	// Resolve device path
-	device, err := pkg.GetDiskByPath(updateDevice)
-	if err != nil {
-		return fmt.Errorf("invalid device: %w", err)
-	}
+	var device string
+	var err error
 
-	if verbose {
-		fmt.Printf("Resolved device: %s\n", device)
+	// Resolve device path - auto-detect if not specified
+	if updateDevice != "" {
+		device, err = pkg.GetDiskByPath(updateDevice)
+		if err != nil {
+			return fmt.Errorf("invalid device: %w", err)
+		}
+		if verbose {
+			fmt.Printf("Using specified device: %s\n", device)
+		}
+	} else {
+		// Auto-detect boot device
+		device, err = pkg.GetCurrentBootDeviceInfo(verbose)
+		if err != nil {
+			return fmt.Errorf("failed to auto-detect boot device: %w (use --device to specify manually)", err)
+		}
+		if !verbose {
+			fmt.Printf("Auto-detected boot device: %s\n", device)
+		}
 	}
 
 	// If image not specified, try to load from system config

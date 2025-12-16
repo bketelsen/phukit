@@ -1,0 +1,305 @@
+package pkg
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// BootcInstaller handles bootc container installation
+type BootcInstaller struct {
+	ImageRef   string
+	Device     string
+	Verbose    bool
+	DryRun     bool
+	KernelArgs []string
+	MountPoint string
+}
+
+// NewBootcInstaller creates a new BootcInstaller
+func NewBootcInstaller(imageRef, device string) *BootcInstaller {
+	return &BootcInstaller{
+		ImageRef:   imageRef,
+		Device:     device,
+		KernelArgs: []string{},
+		MountPoint: "/tmp/phukit-install",
+	}
+}
+
+// SetVerbose enables verbose output
+func (b *BootcInstaller) SetVerbose(verbose bool) {
+	b.Verbose = verbose
+}
+
+// SetDryRun enables dry run mode
+func (b *BootcInstaller) SetDryRun(dryRun bool) {
+	b.DryRun = dryRun
+}
+
+// AddKernelArg adds a kernel argument
+func (b *BootcInstaller) AddKernelArg(arg string) {
+	b.KernelArgs = append(b.KernelArgs, arg)
+}
+
+// SetMountPoint sets the temporary mount point for installation
+func (b *BootcInstaller) SetMountPoint(mountPoint string) {
+	b.MountPoint = mountPoint
+}
+
+// CheckPodmanAvailable checks if podman is available
+func CheckPodmanAvailable() error {
+	cmd := exec.Command("podman", "--version")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("podman is not available: %w", err)
+	}
+	return nil
+}
+
+// CheckRequiredTools checks if required tools are available
+func CheckRequiredTools() error {
+	tools := []string{
+		"podman",
+		"sgdisk",
+		"mkfs.vfat",
+		"mkfs.ext4",
+		"mount",
+		"umount",
+		"blkid",
+		"partprobe",
+	}
+
+	// Check for grub-install or grub2-install
+	hasGrub := false
+	for _, grubCmd := range []string{"grub-install", "grub2-install"} {
+		if _, err := exec.LookPath(grubCmd); err == nil {
+			hasGrub = true
+			break
+		}
+	}
+	if !hasGrub {
+		return fmt.Errorf("grub-install or grub2-install not found")
+	}
+
+	for _, tool := range tools {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s not found: %w", tool, err)
+		}
+	}
+
+	return nil
+}
+
+// PullImage pulls the container image
+func (b *BootcInstaller) PullImage() error {
+	if b.DryRun {
+		fmt.Printf("[DRY RUN] Would pull image: %s\n", b.ImageRef)
+		return nil
+	}
+
+	fmt.Printf("Pulling image: %s\n", b.ImageRef)
+
+	args := []string{"pull"}
+	if b.Verbose {
+		args = append(args, "--log-level=debug")
+	}
+	args = append(args, b.ImageRef)
+
+	cmd := exec.Command("podman", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to pull image: %w", err)
+	}
+
+	return nil
+}
+
+// Install performs the bootc installation to the target disk
+func (b *BootcInstaller) Install() error {
+	if b.DryRun {
+		fmt.Printf("[DRY RUN] Would install %s to %s\n", b.ImageRef, b.Device)
+		if len(b.KernelArgs) > 0 {
+			fmt.Printf("[DRY RUN] With kernel arguments: %s\n", strings.Join(b.KernelArgs, " "))
+		}
+		return nil
+	}
+
+	fmt.Printf("Installing bootc image to disk...\n")
+	fmt.Printf("  Image:  %s\n", b.ImageRef)
+	fmt.Printf("  Device: %s\n", b.Device)
+	fmt.Println()
+
+	// Step 1: Create partitions
+	fmt.Println("Step 1/6: Creating partitions...")
+	scheme, err := CreatePartitions(b.Device, b.DryRun)
+	if err != nil {
+		return fmt.Errorf("failed to create partitions: %w", err)
+	}
+
+	// Step 2: Format partitions
+	fmt.Println("\nStep 2/6: Formatting partitions...")
+	if err := FormatPartitions(scheme, b.DryRun); err != nil {
+		return fmt.Errorf("failed to format partitions: %w", err)
+	}
+
+	// Step 3: Mount partitions
+	fmt.Println("\nStep 3/6: Mounting partitions...")
+	if err := MountPartitions(scheme, b.MountPoint, b.DryRun); err != nil {
+		return fmt.Errorf("failed to mount partitions: %w", err)
+	}
+
+	// Ensure cleanup on error
+	defer func() {
+		if !b.DryRun {
+			fmt.Println("\nCleaning up...")
+			UnmountPartitions(b.MountPoint, b.DryRun)
+			os.RemoveAll(b.MountPoint)
+		}
+	}()
+
+	// Step 4: Extract container filesystem
+	fmt.Println("\nStep 4/6: Extracting container filesystem...")
+	extractor := NewContainerExtractor(b.ImageRef, b.MountPoint)
+	extractor.SetVerbose(b.Verbose)
+	if err := extractor.Extract(); err != nil {
+		return fmt.Errorf("failed to extract container: %w", err)
+	}
+
+	// Step 5: Configure system
+	fmt.Println("\nStep 5/6: Configuring system...")
+
+	// Create fstab
+	if err := CreateFstab(b.MountPoint, scheme); err != nil {
+		return fmt.Errorf("failed to create fstab: %w", err)
+	}
+
+	// Setup system directories
+	if err := SetupSystemDirectories(b.MountPoint); err != nil {
+		return fmt.Errorf("failed to setup directories: %w", err)
+	}
+
+	// Write system configuration
+	config := &SystemConfig{
+		ImageRef:       b.ImageRef,
+		Device:         b.Device,
+		InstallDate:    time.Now().Format(time.RFC3339),
+		KernelArgs:     b.KernelArgs,
+		BootloaderType: string(DetectBootloader(b.MountPoint)),
+	}
+	if err := WriteSystemConfigToTarget(b.MountPoint, config, b.DryRun); err != nil {
+		return fmt.Errorf("failed to write system config: %w", err)
+	}
+
+	// Step 6: Install bootloader
+	fmt.Println("\nStep 6/6: Installing bootloader...")
+	bootloader := NewBootloaderInstaller(b.MountPoint, b.Device, scheme)
+	bootloader.SetVerbose(b.Verbose)
+
+	// Add kernel arguments
+	for _, arg := range b.KernelArgs {
+		bootloader.AddKernelArg(arg)
+	}
+
+	// Detect and install appropriate bootloader
+	bootloaderType := DetectBootloader(b.MountPoint)
+	bootloader.SetType(bootloaderType)
+
+	if err := bootloader.Install(); err != nil {
+		return fmt.Errorf("failed to install bootloader: %w", err)
+	}
+
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("Installation completed successfully!")
+	fmt.Println(strings.Repeat("=", 60))
+	return nil
+}
+
+// Verify performs post-installation verification
+func (b *BootcInstaller) Verify() error {
+	if b.DryRun {
+		fmt.Println("[DRY RUN] Would verify installation")
+		return nil
+	}
+
+	fmt.Println("Verifying installation...")
+
+	// Check if the device has partitions now
+	deviceName := strings.TrimPrefix(b.Device, "/dev/")
+	diskInfo, err := getDiskInfo(deviceName)
+	if err != nil {
+		return fmt.Errorf("failed to verify: %w", err)
+	}
+
+	if len(diskInfo.Partitions) == 0 {
+		return fmt.Errorf("no partitions found on device after installation")
+	}
+
+	fmt.Printf("Found %d partition(s) on %s\n", len(diskInfo.Partitions), b.Device)
+	for _, part := range diskInfo.Partitions {
+		fmt.Printf("  - %s (%s)\n", part.Device, FormatSize(part.Size))
+	}
+
+	return nil
+}
+
+// InstallComplete performs the complete installation workflow
+func (b *BootcInstaller) InstallComplete(skipPull bool) error {
+	// Check prerequisites
+	fmt.Println("Checking prerequisites...")
+	if err := CheckRequiredTools(); err != nil {
+		return fmt.Errorf("missing required tools: %w", err)
+	}
+	if err := CheckPodmanAvailable(); err != nil {
+		return err
+	}
+
+	// Validate disk
+	fmt.Printf("Validating disk %s...\n", b.Device)
+	minSize := uint64(10 * 1024 * 1024 * 1024) // 10 GB minimum
+	if err := ValidateDisk(b.Device, minSize); err != nil {
+		return err
+	}
+
+	// Pull image if not skipped
+	if !skipPull {
+		if err := b.PullImage(); err != nil {
+			return err
+		}
+	}
+
+	// Confirm before wiping
+	if !b.DryRun {
+		fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
+		fmt.Printf("WARNING: This will DESTROY ALL DATA on %s!\n", b.Device)
+		fmt.Printf(strings.Repeat("=", 60) + "\n")
+		fmt.Print("Type 'yes' to continue: ")
+		var response string
+		fmt.Scanln(&response)
+		if response != "yes" {
+			return fmt.Errorf("installation cancelled by user")
+		}
+		fmt.Println()
+	}
+
+	// Wipe disk
+	fmt.Printf("Wiping disk %s...\n", b.Device)
+	if err := WipeDisk(b.Device, b.DryRun); err != nil {
+		return err
+	}
+	fmt.Println()
+
+	// Install
+	if err := b.Install(); err != nil {
+		return err
+	}
+
+	// Verify
+	if err := b.Verify(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: verification failed: %v\n", err)
+	}
+
+	return nil
+}

@@ -1,0 +1,51 @@
+.PHONY: build clean install test run help
+
+BINARY_NAME=phukit
+VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS=-ldflags "-X main.version=$(VERSION) -s -w"
+
+help: ## Display this help message
+	@echo "Available targets:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
+
+build: ## Build the binary
+	@echo "Building $(BINARY_NAME) version $(VERSION)..."
+	@go build $(LDFLAGS) -o $(BINARY_NAME) .
+	@echo "Build complete: ./$(BINARY_NAME)"
+
+clean: ## Remove build artifacts
+	@echo "Cleaning..."
+	@rm -f $(BINARY_NAME)
+	@go clean
+
+install: build ## Install to /usr/local/bin
+	@echo "Installing $(BINARY_NAME) to /usr/local/bin..."
+	@sudo cp $(BINARY_NAME) /usr/local/bin/
+	@echo "Installed successfully"
+
+test: ## Run tests
+	@echo "Running tests..."
+	@go test -v ./...
+
+fmt: ## Format code
+	@echo "Formatting code..."
+	@go fmt ./...
+
+lint: ## Run linter
+	@echo "Running linter..."
+	@golangci-lint run || echo "golangci-lint not installed, skipping"
+
+run: build ## Build and run
+	@./$(BINARY_NAME)
+
+docker-build: ## Build Docker image
+	@echo "Building Docker image..."
+	@docker build -t $(BINARY_NAME):$(VERSION) .
+	@docker tag $(BINARY_NAME):$(VERSION) $(BINARY_NAME):latest
+
+deps: ## Download dependencies
+	@echo "Downloading dependencies..."
+	@go mod download
+	@go mod tidy
+
+.DEFAULT_GOAL := help

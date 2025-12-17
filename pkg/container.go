@@ -153,10 +153,20 @@ func extractTar(r io.Reader, targetDir string) error {
 			_ = os.Chown(target, header.Uid, header.Gid)
 
 			// Set mode including special bits (SUID/SGID/sticky)
-			mode := os.FileMode(header.Mode & 07777)
+			// Convert from Unix format to Go's FileMode format
+			mode := os.FileMode(header.Mode & 0777)
+			if header.Mode&04000 != 0 {
+				mode |= os.ModeSetuid
+			}
+			if header.Mode&02000 != 0 {
+				mode |= os.ModeSetgid
+			}
+			if header.Mode&01000 != 0 {
+				mode |= os.ModeSticky
+			}
 
 			if err := os.Chmod(target, mode); err != nil {
-				return fmt.Errorf("failed to set mode %04o on directory %s: %w", mode, target, err)
+				return fmt.Errorf("failed to set mode on directory %s: %w", target, err)
 			}
 
 		case tar.TypeReg:
@@ -184,12 +194,23 @@ func extractTar(r io.Reader, targetDir string) error {
 			}
 
 			// Set the mode AFTER ownership to restore SUID/SGID/sticky bits
-			// The tar header.Mode contains permission bits in the low 12 bits:
-			// 04000 = SUID, 02000 = SGID, 01000 = sticky, 0777 = rwxrwxrwx
-			mode := os.FileMode(header.Mode & 07777)
+			// The tar header.Mode is int64 in Unix format (low 12 bits: permissions + special bits)
+			// Need to convert to Go's os.FileMode which uses different bit positions for special bits
+			mode := os.FileMode(header.Mode & 0777) // rwxrwxrwx
+
+			// Add special bits if present in tar header
+			if header.Mode&04000 != 0 { // SUID in Unix format
+				mode |= os.ModeSetuid
+			}
+			if header.Mode&02000 != 0 { // SGID in Unix format
+				mode |= os.ModeSetgid
+			}
+			if header.Mode&01000 != 0 { // Sticky in Unix format
+				mode |= os.ModeSticky
+			}
 
 			if err := os.Chmod(target, mode); err != nil {
-				return fmt.Errorf("failed to set mode %04o on file %s: %w", mode, target, err)
+				return fmt.Errorf("failed to set mode on file %s: %w", target, err)
 			}
 
 		case tar.TypeSymlink:
@@ -229,9 +250,19 @@ func extractTar(r io.Reader, targetDir string) error {
 				// For copied files, set ownership and mode
 				_ = os.Chown(target, header.Uid, header.Gid)
 
-				mode := os.FileMode(header.Mode & 07777)
+				mode := os.FileMode(header.Mode & 0777)
+				if header.Mode&04000 != 0 {
+					mode |= os.ModeSetuid
+				}
+				if header.Mode&02000 != 0 {
+					mode |= os.ModeSetgid
+				}
+				if header.Mode&01000 != 0 {
+					mode |= os.ModeSticky
+				}
+
 				if err := os.Chmod(target, mode); err != nil {
-					return fmt.Errorf("failed to set mode %04o on copied hard link %s: %w", mode, target, err)
+					return fmt.Errorf("failed to set mode on copied hard link %s: %w", target, err)
 				}
 			}
 			// Note: For actual hard links, ownership/mode are shared with the target

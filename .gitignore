@@ -38,3 +38,7 @@ config.yaml
 
 # direnv
 .envrc
+# Added by goreleaser init:
+dist/
+completions/
+manpages/

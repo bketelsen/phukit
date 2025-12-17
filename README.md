@@ -537,3 +537,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ⚠️ **THIS TOOL WILL DESTROY ALL DATA ON THE TARGET DISK** ⚠️
 
 Always double-check the device path before running install commands. Use `--dry-run` to test without making changes.
+
+## Missing / Planned Features
+
+* someone ought to actually test this
+* root mount RO

@@ -27,6 +27,37 @@ test: ## Run tests
 	@echo "Running tests..."
 	@go test -v ./...
 
+test-unit: ## Run unit tests (no root required)
+	@echo "Running unit tests..."
+	@go test -v ./pkg/... -run "^(TestFormatSize|TestGetBootDeviceFromPartition|TestGetDiskByPath)$$"
+
+test-integration: ## Run integration tests (requires root)
+	@echo "Running integration tests (requires root)..."
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Re-running with sudo and preserving PATH..."; \
+		sudo -E PATH="/usr/sbin:/sbin:$$PATH" $(MAKE) test-integration; \
+	else \
+		./test_integration.sh; \
+	fi
+
+test-install: ## Run installation tests (requires root)
+	@echo "Running installation tests (requires root)..."
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Re-running with sudo and preserving PATH..."; \
+		sudo -E PATH="/usr/sbin:/sbin:$$PATH" $(MAKE) test-install; \
+	else \
+		go test -v ./pkg/... -run "^(TestBootcInstaller)" -timeout 20m; \
+	fi
+
+test-update: ## Run update tests (requires root)
+	@echo "Running update tests (requires root)..."
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Re-running with sudo and preserving PATH..."; \
+		sudo -E PATH="/usr/sbin:/sbin:$$PATH" $(MAKE) test-update; \
+	else \
+		go test -v ./pkg/... -run "^(TestSystemUpdater)" -timeout 20m; \
+	fi
+
 fmt: ## Format code
 	@echo "Formatting code..."
 	@go fmt ./...

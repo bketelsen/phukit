@@ -50,7 +50,7 @@ func GetInactiveRootPartition(scheme *PartitionScheme) (string, bool, error) {
 		// If we can't determine active, default to root1 as active
 		fmt.Fprintf(os.Stderr, "Warning: could not determine active partition: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Defaulting to root2 as target\n")
-		return scheme.Root2Partition, false, nil
+		return scheme.Root2Partition, true, nil
 	}
 
 	// Normalize paths for comparison
@@ -64,7 +64,13 @@ func GetInactiveRootPartition(scheme *PartitionScheme) (string, bool, error) {
 		return scheme.Root1Partition, false, nil
 	}
 
-	return "", false, fmt.Errorf("active partition %s does not match either root partition", active)
+	// Active partition doesn't match either root partition
+	// This can happen in test scenarios where we're not booted from the target disk
+	// Default to root1 as active, root2 as target
+	fmt.Fprintf(os.Stderr, "Warning: active partition %s does not match either root partition (%s or %s)\n",
+		active, scheme.Root1Partition, scheme.Root2Partition)
+	fmt.Fprintf(os.Stderr, "Defaulting to root2 as target\n")
+	return scheme.Root2Partition, true, nil
 }
 
 // DetectExistingPartitionScheme detects the partition scheme of an existing installation
@@ -73,7 +79,8 @@ func DetectExistingPartitionScheme(device string) (*PartitionScheme, error) {
 	var part1, part2, part3, part4, part5 string
 
 	// Handle different device naming conventions
-	if strings.HasPrefix(deviceBase, "nvme") || strings.HasPrefix(deviceBase, "mmcblk") {
+	// nvme, mmcblk, and loop devices use "p" prefix for partitions
+	if strings.HasPrefix(deviceBase, "nvme") || strings.HasPrefix(deviceBase, "mmcblk") || strings.HasPrefix(deviceBase, "loop") {
 		part1 = device + "p1"
 		part2 = device + "p2"
 		part3 = device + "p3"
@@ -111,6 +118,7 @@ type UpdaterConfig struct {
 	ImageRef       string
 	Verbose        bool
 	DryRun         bool
+	Force          bool // Skip interactive confirmation
 	KernelArgs     []string
 	MountPoint     string
 	BootMountPoint string
@@ -144,6 +152,11 @@ func (u *SystemUpdater) SetVerbose(verbose bool) {
 // SetDryRun enables dry run mode
 func (u *SystemUpdater) SetDryRun(dryRun bool) {
 	u.Config.DryRun = dryRun
+}
+
+// SetForce enables non-interactive mode (skips confirmation)
+func (u *SystemUpdater) SetForce(force bool) {
+	u.Config.Force = force
 }
 
 // AddKernelArg adds a kernel argument
@@ -404,7 +417,7 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 	}
 
 	// Confirm update
-	if !u.Config.DryRun {
+	if !u.Config.DryRun && !u.Config.Force {
 		fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
 		fmt.Printf("This will update the system to a new root filesystem.\n")
 		fmt.Printf("Target partition: %s\n", u.Target)

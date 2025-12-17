@@ -58,15 +58,46 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 	}
 	defer os.RemoveAll(activeMountPoint)
 
-	// Check if already mounted (we're running from this partition)
-	// In that case, we can read directly from /
+	// Try to mount the active partition
+	// If it fails, we might be running from this partition already
+	cmd := exec.Command("mount", "-o", "ro", activeRootPartition, activeMountPoint)
+	mountErr := cmd.Run()
+	mountedPartition := mountErr == nil
+
+	if mountedPartition {
+		defer exec.Command("umount", activeMountPoint).Run()
+
+		// Also need to mount /var partition to access pristine /etc
+		// Determine the partition scheme to get the var partition
+		device := strings.TrimSuffix(activeRootPartition, "p3")
+		device = strings.TrimSuffix(device, "p4")
+		device = strings.TrimSuffix(device, "3")
+		device = strings.TrimSuffix(device, "4")
+
+		// Detect scheme to get var partition
+		scheme, err := DetectExistingPartitionScheme(device)
+		if err == nil && scheme.VarPartition != "" {
+			varMountPoint := filepath.Join(activeMountPoint, "var")
+			os.MkdirAll(varMountPoint, 0755)
+			varCmd := exec.Command("mount", "-o", "ro", scheme.VarPartition, varMountPoint)
+			if varCmd.Run() == nil {
+				defer exec.Command("umount", varMountPoint).Run()
+			}
+		}
+	}
+
+	// Determine /etc source based on whether we mounted the partition
 	activeEtcSource := "/etc"
 	pristineEtcSource := PristineEtcPath
+	if mountedPartition {
+		activeEtcSource = filepath.Join(activeMountPoint, "etc")
+		pristineEtcSource = filepath.Join(activeMountPoint, "var", "lib", "phukit", "etc.pristine")
+	}
 
 	// If pristine /etc doesn't exist, we can't do a 3-way merge
 	// Fall back to simple copy
 	if _, err := os.Stat(pristineEtcSource); os.IsNotExist(err) {
-		fmt.Println("  No pristine /etc found, copying all configuration files...")
+		fmt.Printf("  No pristine /etc found at %s, copying all configuration files...\n", pristineEtcSource)
 		return copyActiveEtc(activeEtcSource, filepath.Join(targetDir, "etc"))
 	}
 
@@ -132,8 +163,8 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 		return fmt.Errorf("failed to create pristine etc directory: %w", err)
 	}
 
-	cmd := exec.Command("rsync", "-a", "--delete", newEtcSource+"/", newPristineEtcPath+"/")
-	if output, err := cmd.CombinedOutput(); err != nil {
+	rsyncCmd := exec.Command("rsync", "-a", "--delete", newEtcSource+"/", newPristineEtcPath+"/")
+	if output, err := rsyncCmd.CombinedOutput(); err != nil {
 		fmt.Printf("    Warning: failed to update pristine /etc: %v\n", err)
 		fmt.Printf("    Output: %s\n", string(output))
 	}

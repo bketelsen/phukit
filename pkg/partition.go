@@ -63,6 +63,13 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 	}
 
 	// Inform kernel of partition changes
+	deviceBase := filepath.Base(device)
+	if strings.HasPrefix(deviceBase, "loop") {
+		// For loop devices, use losetup --partscan to force partition re-read
+		if err := exec.Command("losetup", "--partscan", device).Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: losetup --partscan failed: %v\n", err)
+		}
+	}
 	if err := exec.Command("partprobe", device).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: partprobe failed: %v\n", err)
 	}
@@ -73,11 +80,11 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 	}
 
 	// Determine partition device names
-	deviceBase := filepath.Base(device)
 	var part1, part2, part3, part4, part5 string
 
 	// Handle different device naming conventions
-	if strings.HasPrefix(deviceBase, "nvme") || strings.HasPrefix(deviceBase, "mmcblk") {
+	// nvme, mmcblk, and loop devices use "p" prefix for partitions
+	if strings.HasPrefix(deviceBase, "nvme") || strings.HasPrefix(deviceBase, "mmcblk") || strings.HasPrefix(deviceBase, "loop") {
 		part1 = device + "p1"
 		part2 = device + "p2"
 		part3 = device + "p3"
@@ -177,12 +184,11 @@ func MountPartitions(scheme *PartitionScheme, mountPoint string, dryRun bool) er
 		return fmt.Errorf("failed to mount root1 partition: %w\nOutput: %s", err, string(output))
 	}
 
-	// Create subdirectories
+	// Create boot and var subdirectories
 	bootDir := filepath.Join(mountPoint, "boot")
-	efiDir := filepath.Join(mountPoint, "boot", "efi")
 	varDir := filepath.Join(mountPoint, "var")
-	if err := os.MkdirAll(efiDir, 0755); err != nil {
-		return fmt.Errorf("failed to create boot directories: %w", err)
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		return fmt.Errorf("failed to create boot directory: %w", err)
 	}
 	if err := os.MkdirAll(varDir, 0755); err != nil {
 		return fmt.Errorf("failed to create var directory: %w", err)
@@ -192,6 +198,12 @@ func MountPartitions(scheme *PartitionScheme, mountPoint string, dryRun bool) er
 	cmd = exec.Command("mount", scheme.BootPartition, bootDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to mount boot partition: %w\nOutput: %s", err, string(output))
+	}
+
+	// Create EFI directory after mounting boot (so it's on the boot partition)
+	efiDir := filepath.Join(mountPoint, "boot", "efi")
+	if err := os.MkdirAll(efiDir, 0755); err != nil {
+		return fmt.Errorf("failed to create efi directory: %w", err)
 	}
 
 	// Mount EFI partition

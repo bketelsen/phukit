@@ -305,7 +305,9 @@ func (u *SystemUpdater) Update() error {
 }
 
 // InstallKernelAndInitramfs checks for new kernel and initramfs in the updated root
-// and copies them to the /boot partition if found
+// and copies them to the appropriate partition based on bootloader type
+// GRUB: copies to /boot partition
+// systemd-boot: copies to /boot/efi (EFI partition)
 func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	// Look for kernel modules in the new root's /usr/lib/modules directory
 	modulesDir := filepath.Join(u.Config.MountPoint, "usr", "lib", "modules")
@@ -330,8 +332,32 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	}
 	defer func() { _ = exec.Command("umount", bootMountPoint).Run() }()
 
-	// Get existing kernels in /boot partition for comparison
-	existingKernels, _ := filepath.Glob(filepath.Join(bootMountPoint, "vmlinuz-*"))
+	// Mount EFI partition (nested)
+	efiMountPoint := filepath.Join(bootMountPoint, "efi")
+	if err := os.MkdirAll(efiMountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to create EFI mount point: %w", err)
+	}
+
+	cmd = exec.Command("mount", u.Scheme.EFIPartition, efiMountPoint)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to mount EFI partition: %w\nOutput: %s", err, string(output))
+	}
+	defer func() { _ = exec.Command("umount", efiMountPoint).Run() }()
+
+	// Detect bootloader type to determine where to copy kernels
+	bootloaderType := u.detectBootloaderTypeFromMount(bootMountPoint, efiMountPoint)
+	fmt.Printf("  Detected bootloader: %s\n", bootloaderType)
+
+	// Determine target directory based on bootloader
+	var kernelDestDir string
+	if bootloaderType == BootloaderSystemdBoot {
+		kernelDestDir = efiMountPoint // systemd-boot needs files on EFI partition
+	} else {
+		kernelDestDir = bootMountPoint // GRUB uses boot partition
+	}
+
+	// Get existing kernels for comparison
+	existingKernels, _ := filepath.Glob(filepath.Join(kernelDestDir, "vmlinuz-*"))
 	existingKernelMap := make(map[string]bool)
 	for _, k := range existingKernels {
 		existingKernelMap[filepath.Base(k)] = true
@@ -369,7 +395,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 
 		// Destination kernel name
 		kernelName := "vmlinuz-" + kernelVersion
-		destKernel := filepath.Join(bootMountPoint, kernelName)
+		destKernel := filepath.Join(kernelDestDir, kernelName)
 
 		// Check if kernel needs to be copied
 		needsCopy := false
@@ -405,7 +431,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 		for _, pattern := range initrdPatterns {
 			if srcInitrd, err := os.Stat(pattern); err == nil && !srcInitrd.IsDir() {
 				initrdName := "initramfs-" + kernelVersion + ".img"
-				destInitrd := filepath.Join(bootMountPoint, initrdName)
+				destInitrd := filepath.Join(kernelDestDir, initrdName)
 
 				// Check if initramfs needs to be copied
 				needsCopy := false
@@ -436,6 +462,29 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	return nil
 }
 
+// detectBootloaderTypeFromMount detects bootloader from already-mounted partitions
+func (u *SystemUpdater) detectBootloaderTypeFromMount(bootMount, efiMount string) BootloaderType {
+	// Check for systemd-boot on EFI partition
+	loaderDir := filepath.Join(efiMount, "loader")
+	if _, err := os.Stat(loaderDir); err == nil {
+		return BootloaderSystemdBoot
+	}
+
+	// Check for GRUB on boot partition
+	grubDirs := []string{
+		filepath.Join(bootMount, "grub"),
+		filepath.Join(bootMount, "grub2"),
+	}
+	for _, dir := range grubDirs {
+		if _, err := os.Stat(dir); err == nil {
+			return BootloaderGRUB2
+		}
+	}
+
+	// Default to GRUB2
+	return BootloaderGRUB2
+}
+
 // UpdateBootloader updates the bootloader to boot from the new partition
 func (u *SystemUpdater) UpdateBootloader() error {
 	// Mount boot partition
@@ -449,6 +498,58 @@ func (u *SystemUpdater) UpdateBootloader() error {
 	}
 	defer func() { _ = exec.Command("umount", u.Config.BootMountPoint).Run() }()
 
+	// Mount EFI partition (nested under boot mount point)
+	efiMountPoint := filepath.Join(u.Config.BootMountPoint, "efi")
+	if err := os.MkdirAll(efiMountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to create EFI mount point: %w", err)
+	}
+
+	cmd = exec.Command("mount", u.Scheme.EFIPartition, efiMountPoint)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to mount EFI partition: %w\nOutput: %s", err, string(output))
+	}
+	defer func() { _ = exec.Command("umount", efiMountPoint).Run() }()
+
+	// Detect bootloader type
+	bootloaderType := u.detectBootloaderType()
+	fmt.Printf("  Detected bootloader: %s\n", bootloaderType)
+
+	// Update based on bootloader type
+	switch bootloaderType {
+	case BootloaderGRUB2:
+		return u.updateGRUBBootloader()
+	case BootloaderSystemdBoot:
+		return u.updateSystemdBootBootloader()
+	default:
+		return fmt.Errorf("unsupported bootloader type: %s", bootloaderType)
+	}
+}
+
+// detectBootloaderType detects which bootloader is installed
+func (u *SystemUpdater) detectBootloaderType() BootloaderType {
+	// Check for systemd-boot
+	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
+	if _, err := os.Stat(loaderDir); err == nil {
+		return BootloaderSystemdBoot
+	}
+
+	// Check for GRUB
+	grubDirs := []string{
+		filepath.Join(u.Config.BootMountPoint, "grub"),
+		filepath.Join(u.Config.BootMountPoint, "grub2"),
+	}
+	for _, dir := range grubDirs {
+		if _, err := os.Stat(dir); err == nil {
+			return BootloaderGRUB2
+		}
+	}
+
+	// Default to GRUB2
+	return BootloaderGRUB2
+}
+
+// updateGRUBBootloader updates GRUB configuration
+func (u *SystemUpdater) updateGRUBBootloader() error {
 	// Get UUID of new root partition
 	targetUUID, err := GetPartitionUUID(u.Target)
 	if err != nil {
@@ -485,7 +586,7 @@ func (u *SystemUpdater) UpdateBootloader() error {
 	}
 	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
 
-	// Update GRUB configuration
+	// Find GRUB directory
 	grubDirs := []string{
 		filepath.Join(u.Config.BootMountPoint, "grub"),
 		filepath.Join(u.Config.BootMountPoint, "grub2"),
@@ -531,7 +632,96 @@ menuentry 'Linux (Previous)' {
 		return fmt.Errorf("failed to write grub.cfg: %w", err)
 	}
 
-	fmt.Printf("  Updated bootloader to boot from %s\n", u.Target)
+	fmt.Printf("  Updated GRUB to boot from %s\n", u.Target)
+	return nil
+}
+
+// updateSystemdBootBootloader updates systemd-boot configuration
+func (u *SystemUpdater) updateSystemdBootBootloader() error {
+	// Get UUIDs
+	targetUUID, err := GetPartitionUUID(u.Target)
+	if err != nil {
+		return fmt.Errorf("failed to get target UUID: %w", err)
+	}
+
+	activeRoot := u.Scheme.Root1Partition
+	if !u.Active {
+		activeRoot = u.Scheme.Root2Partition
+	}
+	activeUUID, _ := GetPartitionUUID(activeRoot)
+
+	// Find kernel and initramfs on EFI partition (where systemd-boot expects them)
+	efiMountPoint := filepath.Join(u.Config.BootMountPoint, "efi")
+	kernels, err := filepath.Glob(filepath.Join(efiMountPoint, "vmlinuz-*"))
+	if err != nil || len(kernels) == 0 {
+		return fmt.Errorf("no kernel found on EFI partition")
+	}
+	kernel := filepath.Base(kernels[0])
+	kernelVersion := strings.TrimPrefix(kernel, "vmlinuz-")
+
+	// Look for initramfs on EFI partition
+	var initrd string
+	initrdPatterns := []string{
+		filepath.Join(efiMountPoint, "initramfs-"+kernelVersion+".img"),
+		filepath.Join(efiMountPoint, "initrd.img-"+kernelVersion),
+		filepath.Join(efiMountPoint, "initramfs-"+kernelVersion),
+	}
+	for _, pattern := range initrdPatterns {
+		if _, err := os.Stat(pattern); err == nil {
+			initrd = filepath.Base(pattern)
+			break
+		}
+	}
+
+	// Build kernel command line
+	kernelCmdline := []string{
+		"root=UUID=" + targetUUID,
+		"ro",
+	}
+	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
+
+	// Update loader.conf to default to the updated entry
+	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
+	loaderConf := `default bootc-updated
+timeout 5
+console-mode max
+editor no
+`
+	loaderConfPath := filepath.Join(loaderDir, "loader.conf")
+	if err := os.WriteFile(loaderConfPath, []byte(loaderConf), 0644); err != nil {
+		return fmt.Errorf("failed to write loader.conf: %w", err)
+	}
+
+	// Create updated boot entry
+	entriesDir := filepath.Join(loaderDir, "entries")
+	if err := os.MkdirAll(entriesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create entries directory: %w", err)
+	}
+
+	updatedEntry := fmt.Sprintf(`title   Linux (Updated)
+linux   /vmlinuz-%s
+initrd  /%s
+options %s
+`, kernelVersion, initrd, strings.Join(kernelCmdline, " "))
+
+	updatedEntryPath := filepath.Join(entriesDir, "bootc-updated.conf")
+	if err := os.WriteFile(updatedEntryPath, []byte(updatedEntry), 0644); err != nil {
+		return fmt.Errorf("failed to write updated boot entry: %w", err)
+	}
+
+	// Create previous boot entry
+	previousEntry := fmt.Sprintf(`title   Linux (Previous)
+linux   /vmlinuz-%s
+initrd  /%s
+options root=UUID=%s ro
+`, kernelVersion, initrd, activeUUID)
+
+	previousEntryPath := filepath.Join(entriesDir, "bootc-previous.conf")
+	if err := os.WriteFile(previousEntryPath, []byte(previousEntry), 0644); err != nil {
+		return fmt.Errorf("failed to write previous boot entry: %w", err)
+	}
+
+	fmt.Printf("  Updated systemd-boot to boot from %s\n", u.Target)
 	return nil
 }
 

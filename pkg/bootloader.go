@@ -53,9 +53,20 @@ func (b *BootloaderInstaller) SetVerbose(verbose bool) {
 }
 
 // copyKernelFromModules copies kernel and initramfs from /usr/lib/modules/$KERNEL_VERSION/ to /boot
+// For systemd-boot, copies to /boot/efi (EFI partition) since systemd-boot runs from ESP
+// For GRUB, copies to /boot (boot partition) where GRUB expects them
 func (b *BootloaderInstaller) copyKernelFromModules() error {
 	modulesDir := filepath.Join(b.TargetDir, "usr", "lib", "modules")
-	bootDir := filepath.Join(b.TargetDir, "boot")
+
+	// Determine destination directory based on bootloader type
+	var bootDir string
+	if b.Type == BootloaderSystemdBoot {
+		// systemd-boot needs files on the EFI System Partition
+		bootDir = filepath.Join(b.TargetDir, "boot", "efi")
+	} else {
+		// GRUB uses the boot partition
+		bootDir = filepath.Join(b.TargetDir, "boot")
+	}
 
 	// Find kernel version directories
 	entries, err := os.ReadDir(modulesDir)
@@ -90,13 +101,17 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 			continue // No kernel found for this version
 		}
 
-		// Copy kernel to /boot
+		// Copy kernel to appropriate boot directory
 		kernelName := "vmlinuz-" + kernelVersion
 		destKernel := filepath.Join(bootDir, kernelName)
 		if err := copyFile(srcKernel, destKernel); err != nil {
 			return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
 		}
-		fmt.Printf("  Copied kernel: %s\n", kernelName)
+		if b.Type == BootloaderSystemdBoot {
+			fmt.Printf("  Copied kernel to EFI partition: %s\n", kernelName)
+		} else {
+			fmt.Printf("  Copied kernel to boot partition: %s\n", kernelName)
+		}
 
 		// Look for initramfs in /usr/lib/modules/$KERNEL_VERSION/
 		initrdPatterns := []string{
@@ -114,7 +129,11 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 				if err := copyFile(pattern, destInitrd); err != nil {
 					return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
 				}
-				fmt.Printf("  Copied initramfs: %s\n", initrdName)
+				if b.Type == BootloaderSystemdBoot {
+					fmt.Printf("  Copied initramfs to EFI partition: %s\n", initrdName)
+				} else {
+					fmt.Printf("  Copied initramfs to boot partition: %s\n", initrdName)
+				}
 				break // Only copy the first matching initramfs
 			}
 		}
@@ -262,7 +281,7 @@ func (b *BootloaderInstaller) installSystemdBoot() error {
 	}
 
 	// Install systemd-boot
-	cmd := exec.Command("bootctl", "--path="+filepath.Join(b.TargetDir, "boot", "efi"), "install")
+	cmd := exec.Command("bootctl", "--root="+b.TargetDir, "install")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -289,21 +308,21 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		return fmt.Errorf("failed to get root UUID: %w", err)
 	}
 
-	// Find kernel
-	bootDir := filepath.Join(b.TargetDir, "boot")
-	kernels, err := filepath.Glob(filepath.Join(bootDir, "vmlinuz-*"))
+	// Find kernel on EFI partition (where systemd-boot expects them)
+	efiDir := filepath.Join(b.TargetDir, "boot", "efi")
+	kernels, err := filepath.Glob(filepath.Join(efiDir, "vmlinuz-*"))
 	if err != nil || len(kernels) == 0 {
-		return fmt.Errorf("no kernel found in /boot")
+		return fmt.Errorf("no kernel found in /boot/efi")
 	}
 	kernel := filepath.Base(kernels[0])
 	kernelVersion := strings.TrimPrefix(kernel, "vmlinuz-")
 
-	// Look for initramfs
+	// Look for initramfs on EFI partition
 	var initrd string
 	initrdPatterns := []string{
-		filepath.Join(bootDir, "initramfs-"+kernelVersion+".img"),
-		filepath.Join(bootDir, "initrd.img-"+kernelVersion),
-		filepath.Join(bootDir, "initramfs-"+kernelVersion),
+		filepath.Join(efiDir, "initramfs-"+kernelVersion+".img"),
+		filepath.Join(efiDir, "initrd.img-"+kernelVersion),
+		filepath.Join(efiDir, "initramfs-"+kernelVersion),
 	}
 	for _, pattern := range initrdPatterns {
 		if _, err := os.Stat(pattern); err == nil {

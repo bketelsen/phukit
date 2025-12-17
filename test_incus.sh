@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 # Test configuration
 VM_NAME="phukit-test-$$"
 DISK_SIZE="60GB"
-TEST_IMAGE="quay.io/centos-bootc/centos-bootc:stream9"
+TEST_IMAGE="ghcr.io/frostyard/debian-bootc-core:latest"
 BUILD_DIR="/tmp/phukit-test-build-$$"
 TIMEOUT=1200  # 20 minutes
 
@@ -105,8 +105,8 @@ echo "Disk Size: ${DISK_SIZE}"
 
 # Launch VM with Fedora (has good tooling support)
 incus launch images:fedora/42/cloud ${VM_NAME} --vm \
-    -c limits.cpu=2 \
-    -c limits.memory=4GiB \
+    -c limits.cpu=4 \
+    -c limits.memory=16GiB \
     -c security.secureboot=false
 
 # Wait for VM to start
@@ -142,7 +142,7 @@ sleep 5
 # Install required tools in VM
 echo -e "${BLUE}=== Installing tools in VM ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
-    dnf install -y podman grub2-efi-x64 grub2-tools gdisk util-linux e2fsprogs dosfstools
+    dnf install -y podman grub2-efi-x64 grub2-tools gdisk util-linux e2fsprogs dosfstools parted rsync
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}Tools installed${NC}\n"
 
@@ -204,14 +204,22 @@ echo "Installing $TEST_IMAGE to $TEST_DISK"
 echo "This may take several minutes..."
 
 # Install - pipe "yes" to confirm destruction
-if timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit install \
+# Save output to log and display, then check exit code
+set +e
+timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit install \
     --image '$TEST_IMAGE' \
     --device '$TEST_DISK' \
-    --verbose" 2>&1 | tee /tmp/phukit-install-$$.log | sed 's/^/  /'; then
+    --verbose" 2>&1 | tee /tmp/phukit-install-$$.log | sed 's/^/  /'
+INSTALL_EXIT=${PIPESTATUS[0]}
+set -e
+
+if [ $INSTALL_EXIT -eq 0 ]; then
     echo -e "${GREEN}✓ Installation successful${NC}\n"
 else
-    echo -e "${RED}✗ Installation failed${NC}"
+    echo -e "${RED}✗ Installation failed with exit code: $INSTALL_EXIT${NC}"
     echo -e "${YELLOW}Install log saved to: /tmp/phukit-install-$$.log${NC}"
+    echo -e "${YELLOW}Last 50 lines of log:${NC}"
+    tail -50 /tmp/phukit-install-$$.log | sed 's/^/  /'
     exit 1
 fi
 
@@ -236,23 +244,89 @@ fi
 
 # Test 5: Verify bootloader installation
 echo -e "${BLUE}=== Test 5: Verify Bootloader ===${NC}"
-incus exec ${VM_NAME} -- bash -c "
+if incus exec ${VM_NAME} -- bash -c "
+    set -e
     mkdir -p /mnt/test-boot
+    mkdir -p /mnt/test-boot/efi
+
+    # Mount boot partition
     BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
+    if [ -z \"\$BOOT_PART\" ]; then
+        echo 'Error: Boot partition not found'
+        exit 1
+    fi
     mount \$BOOT_PART /mnt/test-boot
+
+    # Mount EFI partition
+    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
+    if [ -z \"\$EFI_PART\" ]; then
+        echo 'Error: EFI partition not found'
+        umount /mnt/test-boot
+        exit 1
+    fi
+    mount \$EFI_PART /mnt/test-boot/efi
+
     echo 'Boot partition contents:'
     ls -lh /mnt/test-boot/
     echo ''
-    echo 'GRUB config:'
-    if [ -d /mnt/test-boot/grub2 ]; then
-        cat /mnt/test-boot/grub2/grub.cfg || cat /mnt/test-boot/grub/grub.cfg
-    else
-        cat /mnt/test-boot/grub/grub.cfg
+    echo 'EFI partition contents:'
+    ls -lh /mnt/test-boot/efi/
+    find /mnt/test-boot/efi -type f -name '*.efi' | head -10
+    echo ''
+
+    # Check for GRUB or systemd-boot
+    BOOTLOADER_FOUND=false
+
+    # Check for GRUB
+    if [ -d /mnt/test-boot/grub2 ] || [ -d /mnt/test-boot/grub ]; then
+        echo 'GRUB bootloader detected'
+        echo 'GRUB config:'
+        if [ -f /mnt/test-boot/grub2/grub.cfg ]; then
+            cat /mnt/test-boot/grub2/grub.cfg
+            BOOTLOADER_FOUND=true
+        elif [ -f /mnt/test-boot/grub/grub.cfg ]; then
+            cat /mnt/test-boot/grub/grub.cfg
+            BOOTLOADER_FOUND=true
+        fi
     fi
+
+    # Check for systemd-boot
+    if [ -d /mnt/test-boot/efi/loader ]; then
+        echo 'systemd-boot detected'
+        echo 'Loader config:'
+        if [ -f /mnt/test-boot/efi/loader/loader.conf ]; then
+            cat /mnt/test-boot/efi/loader/loader.conf
+            BOOTLOADER_FOUND=true
+        fi
+        echo ''
+        echo 'Boot entries:'
+        if [ -d /mnt/test-boot/efi/loader/entries ]; then
+            ls -lh /mnt/test-boot/efi/loader/entries/
+            for entry in /mnt/test-boot/efi/loader/entries/*.conf; do
+                [ -f \"\$entry\" ] && echo \"Entry: \$entry\" && cat \"\$entry\" && echo ''
+            done
+            BOOTLOADER_FOUND=true
+        fi
+    fi
+
+    if [ \"\$BOOTLOADER_FOUND\" = false ]; then
+        echo 'Error: No bootloader configuration found (checked GRUB and systemd-boot)'
+        umount /mnt/test-boot/efi
+        umount /mnt/test-boot
+        exit 1
+    fi
+
+    # Cleanup
+    umount /mnt/test-boot/efi
     umount /mnt/test-boot
+    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
-" 2>&1 | sed 's/^/  /'
-echo -e "${GREEN}✓ Bootloader verified${NC}\n"
+" 2>&1 | sed 's/^/  /'; then
+    echo -e "${GREEN}✓ Bootloader verified${NC}\n"
+else
+    echo -e "${RED}✗ Bootloader verification failed${NC}"
+    exit 1
+fi
 
 # Test 6: Mount and verify root filesystem
 echo -e "${BLUE}=== Test 6: Verify Root Filesystem ===${NC}"
@@ -276,15 +350,58 @@ echo -e "${GREEN}✓ Root filesystem verified${NC}\n"
 # Test 7: Update to new version (simulated)
 echo -e "${BLUE}=== Test 7: System Update ===${NC}"
 echo "Performing update (writing to inactive partition)..."
+echo "Note: Update requires config from /etc/phukit and pristine /etc from /var/lib/phukit"
+
+# Update needs to read:
+# 1. /etc/phukit/config.json from the active root partition
+# 2. /var/lib/phukit/etc.pristine from the var partition
+# Mount both partitions and bind-mount the necessary directories
+echo "Mounting active partitions to access config and pristine /etc..."
+incus exec ${VM_NAME} -- bash -c "
+    ROOT1=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root1' | head -1 | awk '{print \"/dev/\" \$1}')
+    VAR_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'var' | head -1 | awk '{print \"/dev/\" \$1}')
+
+    mkdir -p /mnt/active-root
+    mkdir -p /mnt/active-var
+
+    # Mount the active root and var partitions
+    mount \$ROOT1 /mnt/active-root
+    mount \$VAR_PART /mnt/active-var
+
+    # Bind mount the config directory to make it accessible at /etc/phukit
+    mkdir -p /etc/phukit
+    mount --bind /mnt/active-root/etc/phukit /etc/phukit
+
+    # Bind mount the pristine /etc directory to make it accessible at /var/lib/phukit
+    mkdir -p /var/lib/phukit
+    mount --bind /mnt/active-var/lib/phukit /var/lib/phukit
+" 2>&1 | sed 's/^/  /'
 
 # Update - pipe "yes" to confirm
-if timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit update \
+set +e
+timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit update \
     --device '$TEST_DISK' \
-    --verbose" 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'; then
+    --verbose" 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'
+UPDATE_EXIT=${PIPESTATUS[0]}
+set -e
+
+# Cleanup mounts
+incus exec ${VM_NAME} -- bash -c "
+    umount /var/lib/phukit 2>/dev/null || true
+    umount /etc/phukit 2>/dev/null || true
+    umount /mnt/active-var 2>/dev/null || true
+    umount /mnt/active-root 2>/dev/null || true
+    rmdir /mnt/active-var 2>/dev/null || true
+    rmdir /mnt/active-root 2>/dev/null || true
+" 2>/dev/null || true
+
+if [ $UPDATE_EXIT -eq 0 ]; then
     echo -e "${GREEN}✓ Update successful${NC}\n"
 else
-    echo -e "${RED}✗ Update failed${NC}"
+    echo -e "${RED}✗ Update failed with exit code: $UPDATE_EXIT${NC}"
     echo -e "${YELLOW}Update log saved to: /tmp/phukit-update-$$.log${NC}"
+    echo -e "${YELLOW}Last 50 lines of log:${NC}"
+    tail -50 /tmp/phukit-update-$$.log | sed 's/^/  /'
     exit 1
 fi
 
@@ -313,13 +430,18 @@ incus exec ${VM_NAME} -- bash -c "
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Both A/B partitions verified${NC}\n"
 
-# Test 9: Verify GRUB has entries for both systems
-echo -e "${BLUE}=== Test 9: Verify GRUB Boot Entries ===${NC}"
+# Test 9: Verify Boot Entries for A/B Systems
+echo -e "${BLUE}=== Test 9: Verify Boot Entries ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
     mkdir -p /mnt/test-boot
+    mkdir -p /mnt/test-boot/efi
     BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
-    mount \$BOOT_PART /mnt/test-boot
+    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
 
+    mount \$BOOT_PART /mnt/test-boot
+    mount \$EFI_PART /mnt/test-boot/efi
+
+    # Check for GRUB entries
     GRUB_CFG=''
     if [ -f /mnt/test-boot/grub2/grub.cfg ]; then
         GRUB_CFG='/mnt/test-boot/grub2/grub.cfg'
@@ -328,32 +450,72 @@ incus exec ${VM_NAME} -- bash -c "
     fi
 
     if [ -n \"\$GRUB_CFG\" ]; then
+        echo 'GRUB boot entries:'
         MENU_ENTRIES=\$(grep -c 'menuentry' \$GRUB_CFG || true)
-        echo \"Found \$MENU_ENTRIES boot menu entries\"
-        grep 'menuentry' \$GRUB_CFG
-    else
-        echo 'GRUB config not found'
+        echo \"  Found \$MENU_ENTRIES boot menu entries\"
+        grep 'menuentry' \$GRUB_CFG | sed 's/^/  /'
     fi
 
+    # Check for systemd-boot entries
+    if [ -d /mnt/test-boot/efi/loader/entries ]; then
+        echo 'systemd-boot entries:'
+        BOOT_ENTRIES=\$(ls -1 /mnt/test-boot/efi/loader/entries/*.conf 2>/dev/null | wc -l)
+        echo \"  Found \$BOOT_ENTRIES boot entries\"
+        for entry in /mnt/test-boot/efi/loader/entries/*.conf; do
+            if [ -f \"\$entry\" ]; then
+                echo \"  Entry: \$(basename \$entry)\"
+                grep '^title' \"\$entry\" | sed 's/^/    /'
+            fi
+        done
+    fi
+
+    umount /mnt/test-boot/efi
     umount /mnt/test-boot
+    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
 " 2>&1 | sed 's/^/  /'
-echo -e "${GREEN}✓ GRUB entries verified${NC}\n"
+echo -e "${GREEN}✓ Boot entries verified${NC}\n"
 
 # Test 10: Check kernel and initramfs
 echo -e "${BLUE}=== Test 10: Verify Kernel and Initramfs ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
     mkdir -p /mnt/test-boot
+    mkdir -p /mnt/test-boot/efi
     BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
+    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
+
     mount \$BOOT_PART /mnt/test-boot
+    mount \$EFI_PART /mnt/test-boot/efi
 
-    echo 'Kernel files:'
-    ls -lh /mnt/test-boot/vmlinuz-* 2>/dev/null || echo 'No kernel found'
-    echo ''
-    echo 'Initramfs files:'
-    ls -lh /mnt/test-boot/initramfs-* 2>/dev/null || ls -lh /mnt/test-boot/initrd-* 2>/dev/null || echo 'No initramfs found'
+    # Check for kernels on boot partition (GRUB)
+    if ls /mnt/test-boot/vmlinuz-* 2>/dev/null 1>&2; then
+        echo 'Kernel files on boot partition (GRUB):'
+        ls -lh /mnt/test-boot/vmlinuz-*
+        echo ''
+        echo 'Initramfs files on boot partition:'
+        ls -lh /mnt/test-boot/initramfs-* 2>/dev/null || ls -lh /mnt/test-boot/initrd-* 2>/dev/null || echo 'No initramfs found'
+    fi
 
+    # Check for kernels on EFI partition (systemd-boot)
+    if ls /mnt/test-boot/efi/vmlinuz-* 2>/dev/null 1>&2; then
+        echo 'Kernel files on EFI partition (systemd-boot):'
+        ls -lh /mnt/test-boot/efi/vmlinuz-*
+        echo ''
+        echo 'Initramfs files on EFI partition:'
+        ls -lh /mnt/test-boot/efi/initramfs-* 2>/dev/null || ls -lh /mnt/test-boot/efi/initrd-* 2>/dev/null || echo 'No initramfs found'
+    fi
+
+    # Verify at least one location has kernels
+    if ! ls /mnt/test-boot/vmlinuz-* 2>/dev/null 1>&2 && ! ls /mnt/test-boot/efi/vmlinuz-* 2>/dev/null 1>&2; then
+        echo 'Error: No kernel found on boot or EFI partition'
+        umount /mnt/test-boot/efi
+        umount /mnt/test-boot
+        exit 1
+    fi
+
+    umount /mnt/test-boot/efi
     umount /mnt/test-boot
+    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Kernel and initramfs verified${NC}\n"
@@ -369,7 +531,7 @@ echo "  ✓ Verify bootloader installation"
 echo "  ✓ Verify root filesystem"
 echo "  ✓ System update (A/B partition)"
 echo "  ✓ Verify both A/B partitions"
-echo "  ✓ Verify GRUB boot entries"
-echo "  ✓ Verify kernel and initramfs"
+echo "  ✓ Verify boot entries (GRUB/systemd-boot)"
+echo "  ✓ Verify kernel and initramfs (boot/EFI partition)"
 echo ""
 echo -e "${GREEN}Integration tests completed successfully!${NC}"

@@ -131,9 +131,13 @@ echo -e "${GREEN}VM started successfully${NC}\n"
 
 # Create and attach a separate disk for installation
 echo -e "${BLUE}=== Creating test disk ===${NC}"
-incus storage volume create default ${VM_NAME}-disk size=${DISK_SIZE}
-incus storage volume attach default ${VM_NAME}-disk ${VM_NAME} disk-test
+incus storage volume create default ${VM_NAME}-disk size=${DISK_SIZE} --type=block
+incus storage volume attach default ${VM_NAME}-disk ${VM_NAME}
 echo -e "${GREEN}Disk created and attached${NC}\n"
+
+# Wait for the disk to appear in the VM
+echo "Waiting for disk to be recognized..."
+sleep 5
 
 # Install required tools in VM
 echo -e "${BLUE}=== Installing tools in VM ===${NC}"
@@ -157,8 +161,14 @@ echo -e "${GREEN}Image pulled${NC}\n"
 # Find the test disk device in the VM
 echo -e "${BLUE}=== Identifying test disk ===${NC}"
 TEST_DISK=$(incus exec ${VM_NAME} -- bash -c "
-    # Find the largest disk that's not mounted
-    lsblk -ndo NAME,SIZE,TYPE,MOUNTPOINT | grep disk | grep -v '/$' | tail -1 | awk '{print \"/dev/\" \$1}'
+    # Find a disk that has no partitions (our empty test disk)
+    for disk in \$(lsblk -ndo NAME,TYPE | grep disk | awk '{print \$1}'); do
+        # Check if disk has no partitions
+        if ! lsblk -no NAME /dev/\$disk | grep -q '[0-9]'; then
+            echo \"/dev/\$disk\"
+            exit 0
+        fi
+    done
 ")
 
 if [ -z "$TEST_DISK" ]; then
@@ -193,12 +203,11 @@ echo -e "${BLUE}=== Test 3: Install to Disk ===${NC}"
 echo "Installing $TEST_IMAGE to $TEST_DISK"
 echo "This may take several minutes..."
 
-# Install with force flag to skip confirmation
-if timeout $TIMEOUT incus exec ${VM_NAME} -- phukit install \
-    --image "$TEST_IMAGE" \
-    --device "$TEST_DISK" \
-    --force \
-    --verbose 2>&1 | tee /tmp/phukit-install-$$.log | sed 's/^/  /'; then
+# Install - pipe "yes" to confirm destruction
+if timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit install \
+    --image '$TEST_IMAGE' \
+    --device '$TEST_DISK' \
+    --verbose" 2>&1 | tee /tmp/phukit-install-$$.log | sed 's/^/  /'; then
     echo -e "${GREEN}✓ Installation successful${NC}\n"
 else
     echo -e "${RED}✗ Installation failed${NC}"
@@ -268,10 +277,10 @@ echo -e "${GREEN}✓ Root filesystem verified${NC}\n"
 echo -e "${BLUE}=== Test 7: System Update ===${NC}"
 echo "Performing update (writing to inactive partition)..."
 
-if timeout $TIMEOUT incus exec ${VM_NAME} -- phukit update \
-    --device "$TEST_DISK" \
-    --force \
-    --verbose 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'; then
+# Update - pipe "yes" to confirm
+if timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit update \
+    --device '$TEST_DISK' \
+    --verbose" 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'; then
     echo -e "${GREEN}✓ Update successful${NC}\n"
 else
     echo -e "${RED}✗ Update failed${NC}"

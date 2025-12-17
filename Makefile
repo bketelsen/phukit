@@ -80,8 +80,8 @@ run: build ## Build and run
 
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."
-	@docker build -t $(BINARY_NAME):$(VERSION) .
-	@docker tag $(BINARY_NAME):$(VERSION) $(BINARY_NAME):latest
+	@podman build -t $(BINARY_NAME):$(VERSION) .
+	@podman tag $(BINARY_NAME):$(VERSION) $(BINARY_NAME):latest
 
 deps: ## Download dependencies
 	@echo "Downloading dependencies..."

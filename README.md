@@ -1,5 +1,7 @@
 # phukit
 
+[![Tests](https://github.com/bketelsen/phukit/actions/workflows/test.yml/badge.svg)](https://github.com/bketelsen/phukit/actions/workflows/test.yml)
+
 A Go application for installing bootc compatible containers to physical disks.
 
 ## Overview

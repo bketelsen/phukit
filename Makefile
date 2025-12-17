@@ -58,6 +58,15 @@ test-update: ## Run update tests (requires root)
 		go test -v ./pkg/... -run "^(TestSystemUpdater)" -timeout 20m; \
 	fi
 
+test-incus: ## Run Incus VM integration tests (requires root and incus)
+	@echo "Running Incus integration tests (requires root and incus)..."
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Re-running with sudo and preserving environment..."; \
+		sudo -E env "PATH=$$PATH" $(MAKE) test-incus; \
+	else \
+		./test_incus.sh; \
+	fi
+
 fmt: ## Format code
 	@echo "Formatting code..."
 	@go fmt ./...

@@ -451,22 +451,59 @@ sudo phukit install --image IMAGE --device DEVICE
 ## Documentation
 
 - [A/B Updates](docs/AB-UPDATES.md) - Detailed documentation on the A/B update system
+- [Incus Integration Tests](docs/INCUS-TESTS.md) - VM-based testing documentation
 - [Implementation Details](IMPLEMENTATION.md) - Technical implementation details
 
 ## Testing
+
+### Unit Tests
 
 ```bash
 # Run unit tests (no root required)
 make test-unit
 
-# Run integration tests (requires root)
-sudo make test-integration
-sudo make test-install
-sudo make test-update
-
 # Run linter
 make lint
 ```
+
+### Integration Tests
+
+Integration tests require root privileges to perform disk operations:
+
+```bash
+# Run basic integration tests (loop devices)
+sudo make test-integration
+
+# Run bootc installation tests
+sudo make test-install
+
+# Run A/B update tests
+sudo make test-update
+```
+
+### Incus VM Tests
+
+For comprehensive end-to-end testing in isolated virtual machines:
+
+```bash
+# Install Incus first: https://linuxcontainers.org/incus/docs/main/installing/
+# Initialize Incus: incus admin init
+
+# Run full integration tests in Incus VM
+sudo make test-incus
+```
+
+The Incus test suite:
+
+- Creates an isolated VM with dedicated virtual disk
+- Tests complete installation workflow
+- Verifies partition layout and bootloader
+- Tests A/B update functionality
+- Validates kernel/initramfs installation
+- Checks GRUB configuration for both boot options
+- Automatically cleans up all resources
+
+**Note**: Incus tests take 10-20 minutes depending on network speed and system performance.
 
 ## Contributing
 

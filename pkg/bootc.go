@@ -155,8 +155,8 @@ func (b *BootcInstaller) Install() error {
 	defer func() {
 		if !b.DryRun {
 			fmt.Println("\nCleaning up...")
-			UnmountPartitions(b.MountPoint, b.DryRun)
-			os.RemoveAll(b.MountPoint)
+			_ = UnmountPartitions(b.MountPoint, b.DryRun)
+			_ = os.RemoveAll(b.MountPoint)
 		}
 	}()
 
@@ -277,12 +277,12 @@ func (b *BootcInstaller) InstallComplete(skipPull bool) error {
 
 	// Confirm before wiping
 	if !b.DryRun {
-		fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
+		fmt.Printf("\n%s\n", strings.Repeat("=", 60))
 		fmt.Printf("WARNING: This will DESTROY ALL DATA on %s!\n", b.Device)
-		fmt.Printf(strings.Repeat("=", 60) + "\n")
+		fmt.Printf("%s\n", strings.Repeat("=", 60))
 		fmt.Print("Type 'yes' to continue: ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "yes" {
 			return fmt.Errorf("installation cancelled by user")
 		}

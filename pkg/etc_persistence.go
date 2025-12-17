@@ -56,7 +56,7 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 	if err := os.MkdirAll(activeMountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create active mount point: %w", err)
 	}
-	defer os.RemoveAll(activeMountPoint)
+	defer func() { _ = os.RemoveAll(activeMountPoint) }()
 
 	// Try to mount the active partition
 	// If it fails, we might be running from this partition already
@@ -65,7 +65,7 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 	mountedPartition := mountErr == nil
 
 	if mountedPartition {
-		defer exec.Command("umount", activeMountPoint).Run()
+		defer func() { _ = exec.Command("umount", activeMountPoint).Run() }()
 
 		// Also need to mount /var partition to access pristine /etc
 		// Determine the partition scheme to get the var partition
@@ -78,10 +78,10 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 		scheme, err := DetectExistingPartitionScheme(device)
 		if err == nil && scheme.VarPartition != "" {
 			varMountPoint := filepath.Join(activeMountPoint, "var")
-			os.MkdirAll(varMountPoint, 0755)
+			_ = os.MkdirAll(varMountPoint, 0755)
 			varCmd := exec.Command("mount", "-o", "ro", scheme.VarPartition, varMountPoint)
 			if varCmd.Run() == nil {
-				defer exec.Command("umount", varMountPoint).Run()
+				defer func() { _ = exec.Command("umount", varMountPoint).Run() }()
 			}
 		}
 	}
@@ -237,7 +237,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	srcInfo, err := srcFile.Stat()
 	if err != nil {
@@ -248,7 +248,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	if _, err := srcFile.WriteTo(dstFile); err != nil {
 		return err

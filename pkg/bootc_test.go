@@ -45,7 +45,7 @@ func TestBootcInstaller_Install(t *testing.T) {
 	t.Log("Verifying installation")
 
 	// Check that partitions were created
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 	scheme, err := DetectExistingPartitionScheme(disk.GetDevice())
 	if err != nil {
 		t.Fatalf("Failed to detect partition scheme: %v", err)
@@ -83,7 +83,7 @@ func TestBootcInstaller_Install(t *testing.T) {
 	if err := MountPartitions(scheme, verifyMount, false); err != nil {
 		t.Fatalf("Failed to mount partitions for verification: %v", err)
 	}
-	defer UnmountPartitions(verifyMount, false)
+	defer func() { _ = UnmountPartitions(verifyMount, false) }()
 
 	// Check for expected directories
 	expectedDirs := []string{
@@ -183,7 +183,7 @@ func TestBootcInstaller_DryRun(t *testing.T) {
 	}
 
 	// Verify that nothing was actually created
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 
 	// Check that partitions were NOT created (dry-run should not modify disk)
 	_, err = DetectExistingPartitionScheme(disk.GetDevice())
@@ -230,7 +230,7 @@ func TestBootcInstaller_WithKernelArgs(t *testing.T) {
 	}
 
 	// Verify kernel arguments in config
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 	scheme, err := DetectExistingPartitionScheme(disk.GetDevice())
 	if err != nil {
 		t.Fatalf("Failed to detect partition scheme: %v", err)
@@ -246,7 +246,7 @@ func TestBootcInstaller_WithKernelArgs(t *testing.T) {
 	if err := MountPartitions(scheme, verifyMount, false); err != nil {
 		t.Fatalf("Failed to mount partitions: %v", err)
 	}
-	defer UnmountPartitions(verifyMount, false)
+	defer func() { _ = UnmountPartitions(verifyMount, false) }()
 
 	configFile := filepath.Join(verifyMount, "etc", "phukit", "config.json")
 	config, err := readConfigFromFile(configFile)

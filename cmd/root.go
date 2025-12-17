@@ -31,8 +31,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolP("dry-run", "n", false, "dry run mode (no actual changes)")
 
-	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
-	viper.BindPFlag("dry-run", rootCmd.PersistentFlags().Lookup("dry-run"))
+	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	_ = viper.BindPFlag("dry-run", rootCmd.PersistentFlags().Lookup("dry-run"))
 }
 
 func initConfig() {

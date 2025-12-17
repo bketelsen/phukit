@@ -75,7 +75,7 @@ func TestFormatPartitions(t *testing.T) {
 		t.Fatalf("CreatePartitions failed: %v", err)
 	}
 
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 
 	// Format partitions
 	t.Log("Formatting partitions")
@@ -117,7 +117,7 @@ func TestMountPartitions(t *testing.T) {
 		t.Fatalf("CreatePartitions failed: %v", err)
 	}
 
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 
 	if err := FormatPartitions(scheme, false); err != nil {
 		t.Fatalf("FormatPartitions failed: %v", err)
@@ -178,7 +178,7 @@ func TestDetectExistingPartitionScheme(t *testing.T) {
 		t.Fatalf("CreatePartitions failed: %v", err)
 	}
 
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 
 	// Detect the scheme
 	t.Log("Detecting existing partition scheme")

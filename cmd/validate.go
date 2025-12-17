@@ -21,7 +21,7 @@ func init() {
 	rootCmd.AddCommand(validateCmd)
 
 	validateCmd.Flags().StringVarP(&validateDevice, "device", "d", "", "Disk device to validate (required)")
-	validateCmd.MarkFlagRequired("device")
+	_ = validateCmd.MarkFlagRequired("device")
 }
 
 func runValidate(cmd *cobra.Command, args []string) error {

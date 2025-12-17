@@ -35,10 +35,10 @@ func CreateTestDisk(t *testing.T, sizeGB int) (*TestDisk, error) {
 		return nil, fmt.Errorf("failed to create image file: %w", err)
 	}
 	if err := f.Truncate(sizeBytes); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("failed to truncate image file: %w", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// Attach to loop device with partition scanning enabled
 	cmd := exec.Command("losetup", "--find", "--show", "--partscan", imagePath)
@@ -156,10 +156,10 @@ func CreateMockContainer(t *testing.T, imageName string) error {
 
 	// Create a Dockerfile
 	dockerfile := filepath.Join(tmpDir, "Dockerfile")
-	dockerfileContent := fmt.Sprintf(`FROM scratch
+	dockerfileContent := `FROM scratch
 COPY rootfs/ /
 CMD ["/bin/sh"]
-`)
+`
 	if err := os.WriteFile(dockerfile, []byte(dockerfileContent), 0644); err != nil {
 		return fmt.Errorf("failed to write Dockerfile: %w", err)
 	}
@@ -174,7 +174,7 @@ CMD ["/bin/sh"]
 	// Register cleanup to remove image
 	t.Cleanup(func() {
 		t.Logf("Removing test container image: %s", imageName)
-		exec.Command("podman", "rmi", "-f", imageName).Run()
+		_ = exec.Command("podman", "rmi", "-f", imageName).Run()
 	})
 
 	return nil
@@ -191,10 +191,9 @@ func WaitForDevice(device string) error {
 	}
 
 	// Also run partprobe to inform kernel of partition changes
+	// partprobe may fail but device could still work, so we ignore errors
 	cmd := exec.Command("partprobe", device)
-	if err := cmd.Run(); err != nil {
-		// partprobe may fail but device could still work, so just log
-	}
+	_ = cmd.Run()
 
 	// Wait for udev to settle
 	cmd = exec.Command("udevadm", "settle")
@@ -231,7 +230,7 @@ CMD ["/bin/sh"]
 	// Register cleanup to remove image
 	t.Cleanup(func() {
 		t.Logf("Removing container image: %s", imageName)
-		exec.Command("podman", "rmi", "-f", imageName).Run()
+		_ = exec.Command("podman", "rmi", "-f", imageName).Run()
 	})
 
 	return nil

@@ -72,7 +72,7 @@ func TestSystemUpdater_EtcPersistence(t *testing.T) {
 	if err := mountSinglePartition(scheme.Root1Partition, mountPoint); err != nil {
 		t.Fatalf("Failed to mount root1: %v", err)
 	}
-	defer unmountSinglePartition(mountPoint)
+	defer func() { _ = unmountSinglePartition(mountPoint) }()
 
 	// Create a custom config file
 	customConfigPath := filepath.Join(mountPoint, "etc", "custom.conf")
@@ -88,7 +88,7 @@ func TestSystemUpdater_EtcPersistence(t *testing.T) {
 		t.Fatalf("Failed to modify hostname: %v", err)
 	}
 
-	unmountSinglePartition(mountPoint)
+	_ = unmountSinglePartition(mountPoint)
 
 	// Create new container image
 	t.Log("Creating updated container")
@@ -120,7 +120,7 @@ func TestSystemUpdater_EtcPersistence(t *testing.T) {
 	if err := mountSinglePartition(scheme.Root2Partition, verifyMount); err != nil {
 		t.Fatalf("Failed to mount root2: %v", err)
 	}
-	defer unmountSinglePartition(verifyMount)
+	defer func() { _ = unmountSinglePartition(verifyMount) }()
 
 	// Check custom config exists
 	customConfigPath2 := filepath.Join(verifyMount, "etc", "custom.conf")
@@ -177,7 +177,7 @@ func installTestSystem(t *testing.T, version string) (*testutil.TestDisk, *Parti
 		t.Fatalf("Install failed: %v", err)
 	}
 
-	testutil.WaitForDevice(disk.GetDevice())
+	_ = testutil.WaitForDevice(disk.GetDevice())
 	scheme, err := DetectExistingPartitionScheme(disk.GetDevice())
 	if err != nil {
 		t.Fatalf("Failed to detect partition scheme: %v", err)
@@ -198,7 +198,7 @@ func modifyEtcOnRoot1(t *testing.T, scheme *PartitionScheme) {
 	if err := mountSinglePartition(scheme.Root1Partition, mountPoint); err != nil {
 		t.Fatalf("Failed to mount root1: %v", err)
 	}
-	defer unmountSinglePartition(mountPoint)
+	defer func() { _ = unmountSinglePartition(mountPoint) }()
 
 	// Modify a file
 	testFile := filepath.Join(mountPoint, "etc", "test-modified.conf")
@@ -274,7 +274,7 @@ func verifyUpdate(t *testing.T, scheme *PartitionScheme, expectedImage string) {
 	if err := mountSinglePartition(scheme.Root2Partition, mountPoint); err != nil {
 		t.Fatalf("Failed to mount root2: %v", err)
 	}
-	defer unmountSinglePartition(mountPoint)
+	defer func() { _ = unmountSinglePartition(mountPoint) }()
 
 	// Check for updated file
 	updatedFile := filepath.Join(mountPoint, "etc", "updated.conf")
@@ -298,7 +298,7 @@ func verifyEtcPersistence(t *testing.T, scheme *PartitionScheme) {
 	if err := mountSinglePartition(scheme.Root2Partition, mountPoint); err != nil {
 		t.Fatalf("Failed to mount root2: %v", err)
 	}
-	defer unmountSinglePartition(mountPoint)
+	defer func() { _ = unmountSinglePartition(mountPoint) }()
 
 	// Check that modified file persisted
 	modifiedFile := filepath.Join(mountPoint, "etc", "test-modified.conf")
@@ -322,6 +322,6 @@ func mountSinglePartition(partition, mountPoint string) error {
 }
 
 func unmountSinglePartition(mountPoint string) error {
-	exec.Command("umount", mountPoint).Run()
+	_ = exec.Command("umount", mountPoint).Run()
 	return nil
 }

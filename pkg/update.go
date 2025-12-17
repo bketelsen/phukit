@@ -58,9 +58,10 @@ func GetInactiveRootPartition(scheme *PartitionScheme) (string, bool, error) {
 	root1Base := filepath.Base(scheme.Root1Partition)
 	root2Base := filepath.Base(scheme.Root2Partition)
 
-	if activeBase == root1Base {
+	switch activeBase {
+	case root1Base:
 		return scheme.Root2Partition, true, nil
-	} else if activeBase == root2Base {
+	case root2Base:
 		return scheme.Root1Partition, false, nil
 	}
 
@@ -241,8 +242,8 @@ func (u *SystemUpdater) Update() error {
 	}
 	defer func() {
 		fmt.Println("\nCleaning up...")
-		exec.Command("umount", u.Config.MountPoint).Run()
-		os.RemoveAll(u.Config.MountPoint)
+		_ = exec.Command("umount", u.Config.MountPoint).Run()
+		_ = os.RemoveAll(u.Config.MountPoint)
 	}()
 
 	// Step 2: Clear existing content
@@ -308,7 +309,7 @@ func (u *SystemUpdater) UpdateBootloader() error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to mount boot partition: %w\nOutput: %s", err, string(output))
 	}
-	defer exec.Command("umount", u.Config.BootMountPoint).Run()
+	defer func() { _ = exec.Command("umount", u.Config.BootMountPoint).Run() }()
 
 	// Get UUID of new root partition
 	targetUUID, err := GetPartitionUUID(u.Target)
@@ -418,13 +419,13 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 
 	// Confirm update
 	if !u.Config.DryRun && !u.Config.Force {
-		fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
+		fmt.Printf("\n%s\n", strings.Repeat("=", 60))
 		fmt.Printf("This will update the system to a new root filesystem.\n")
 		fmt.Printf("Target partition: %s\n", u.Target)
-		fmt.Printf(strings.Repeat("=", 60) + "\n")
+		fmt.Printf("%s\n", strings.Repeat("=", 60))
 		fmt.Print("Type 'yes' to continue: ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "yes" {
 			return fmt.Errorf("update cancelled by user")
 		}

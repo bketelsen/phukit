@@ -33,10 +33,10 @@ func (c *ContainerExtractor) Extract() error {
 	fmt.Printf("Extracting container image %s...\n", c.ImageRef)
 
 	// Create a temporary container
-	containerName := "phukit-extract-" + strings.Replace(strings.Replace(c.ImageRef, "/", "-", -1), ":", "-", -1)
+	containerName := "phukit-extract-" + strings.ReplaceAll(strings.ReplaceAll(c.ImageRef, "/", "-"), ":", "-")
 
 	// Remove any existing container with the same name
-	exec.Command("podman", "rm", "-f", containerName).Run()
+	_ = exec.Command("podman", "rm", "-f", containerName).Run()
 
 	// Create container from image
 	fmt.Println("  Creating temporary container...")
@@ -50,7 +50,7 @@ func (c *ContainerExtractor) Extract() error {
 		if c.Verbose {
 			fmt.Println("  Cleaning up temporary container...")
 		}
-		exec.Command("podman", "rm", "-f", containerName).Run()
+		_ = exec.Command("podman", "rm", "-f", containerName).Run()
 	}()
 
 	// Export container filesystem
@@ -173,9 +173,8 @@ func SetupSystemDirectories(targetDir string) error {
 	}
 
 	// Set proper permissions for tmp directories
-	os.Chmod(filepath.Join(targetDir, "tmp"), 01777)
-	os.Chmod(filepath.Join(targetDir, "var", "tmp"), 01777)
-
+	_ = os.Chmod(filepath.Join(targetDir, "tmp"), 01777)
+	_ = os.Chmod(filepath.Join(targetDir, "var", "tmp"), 01777)
 	fmt.Println("System directories created")
 	return nil
 }
@@ -199,10 +198,10 @@ func ChrootCommand(targetDir string, command string, args ...string) error {
 
 	// Cleanup function to unmount
 	defer func() {
-		exec.Command("umount", filepath.Join(targetDir, "run")).Run()
-		exec.Command("umount", filepath.Join(targetDir, "sys")).Run()
-		exec.Command("umount", filepath.Join(targetDir, "proc")).Run()
-		exec.Command("umount", filepath.Join(targetDir, "dev")).Run()
+		_ = exec.Command("umount", filepath.Join(targetDir, "run")).Run()
+		_ = exec.Command("umount", filepath.Join(targetDir, "sys")).Run()
+		_ = exec.Command("umount", filepath.Join(targetDir, "proc")).Run()
+		_ = exec.Command("umount", filepath.Join(targetDir, "dev")).Run()
 	}()
 
 	// Build chroot command

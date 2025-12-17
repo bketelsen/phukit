@@ -45,8 +45,8 @@ func init() {
 	installCmd.Flags().BoolVar(&installSkipPull, "skip-pull", false, "Skip pulling the image (use already pulled image)")
 	installCmd.Flags().StringArrayVarP(&installKernelArgs, "karg", "k", []string{}, "Kernel argument to pass (can be specified multiple times)")
 
-	installCmd.MarkFlagRequired("image")
-	installCmd.MarkFlagRequired("device")
+	_ = installCmd.MarkFlagRequired("image")
+	_ = installCmd.MarkFlagRequired("device")
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {

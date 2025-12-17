@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/frostyard/phukit/pkg/testutil"
+	"github.com/bketelsen/phukit/pkg/testutil"
 )
 
 func TestBootcInstaller_Install(t *testing.T) {

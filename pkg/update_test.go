@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/frostyard/phukit/pkg/testutil"
+	"github.com/bketelsen/phukit/pkg/testutil"
 )
 
 func TestSystemUpdater_Update(t *testing.T) {

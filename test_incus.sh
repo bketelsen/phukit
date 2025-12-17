@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 # Test configuration
 VM_NAME="phukit-test-$$"
 DISK_SIZE="60GB"
-TEST_IMAGE="ghcr.io/frostyard/debian-bootc-core:latest"
+TEST_IMAGE="ghcr.io/bketelsen/debian-bootc-core:latest"
 BUILD_DIR="/tmp/phukit-test-build-$$"
 TIMEOUT=1200  # 20 minutes
 

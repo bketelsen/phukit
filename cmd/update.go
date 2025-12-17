@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/frostyard/phukit/pkg"
+	"github.com/bketelsen/phukit/pkg"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

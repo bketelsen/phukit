@@ -96,7 +96,8 @@ bump: ## generate a new version with svu
 	@echo "Creating new tag..."
 	@version=$$(svu next); \
 		git tag -a $$version -m "Version $$version"; \
-		echo "Tagged version $$version" \
-		git push origin --tags
+		echo "Tagged version $$version" ;
+	@echo "Pushing tags to origin..."
+	@git push origin --tags
 
 .DEFAULT_GOAL := help

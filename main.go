@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/frostyard/phukit/cmd"
+	"github.com/bketelsen/phukit/cmd"
 )
 
 // version is set by ldflags during build

@@ -1,4 +1,4 @@
-module github.com/frostyard/phukit
+module github.com/bketelsen/phukit
 
 go 1.24.2
 

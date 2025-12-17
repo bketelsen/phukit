@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -72,10 +73,12 @@ func (c *ContainerExtractor) Extract() error {
 
 		// Extract tar contents to target directory
 		if err := extractTar(rc, c.TargetDir); err != nil {
-			rc.Close()
+			_ = rc.Close()
 			return fmt.Errorf("failed to extract layer %d: %w", i, err)
 		}
-		rc.Close()
+		if err := rc.Close(); err != nil {
+			return fmt.Errorf("failed to close layer %d: %w", i, err)
+		}
 	}
 
 	fmt.Println("Container filesystem extracted successfully")
@@ -98,7 +101,9 @@ func extractTar(r io.Reader, targetDir string) error {
 		target := filepath.Join(targetDir, header.Name)
 
 		// Ensure target is within targetDir (prevent path traversal)
-		if !filepath.HasPrefix(filepath.Clean(target), filepath.Clean(targetDir)) {
+		cleanTarget := filepath.Clean(target)
+		cleanTargetDir := filepath.Clean(targetDir) + string(filepath.Separator)
+		if !strings.HasPrefix(cleanTarget+string(filepath.Separator), cleanTargetDir) && cleanTarget != filepath.Clean(targetDir) {
 			continue
 		}
 
@@ -182,16 +187,17 @@ func extractTar(r io.Reader, targetDir string) error {
 			}
 
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to write file %s: %w", target, err)
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("failed to close file %s: %w", target, err)
+			}
 
 			// Set ownership first (this will clear SUID/SGID on Linux for security)
-			if err := os.Chown(target, header.Uid, header.Gid); err != nil {
-				// Ownership change may fail if not root or UIDs don't exist
-				// Continue anyway to at least set permissions
-			}
+			// Ignoring error - ownership change may fail if not root or UIDs don't exist
+			// We'll still try to set permissions below
+			_ = os.Chown(target, header.Uid, header.Gid)
 
 			// Set the mode AFTER ownership to restore SUID/SGID/sticky bits
 			// The tar header.Mode is int64 in Unix format (low 12 bits: permissions + special bits)

@@ -246,21 +246,31 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 3: Extract new container filesystem
-	fmt.Println("\nStep 3/5: Extracting new container filesystem...")
+	fmt.Println("\nStep 3/6: Extracting new container filesystem...")
 	extractor := NewContainerExtractor(u.Config.ImageRef, u.Config.MountPoint)
 	extractor.SetVerbose(u.Config.Verbose)
 	if err := extractor.Extract(); err != nil {
 		return fmt.Errorf("failed to extract container: %w", err)
 	}
 
-	// Step 4: Setup system directories
-	fmt.Println("\nStep 4/5: Setting up system directories...")
+	// Step 4: Merge /etc configuration from active system
+	fmt.Println("\nStep 4/6: Preserving user configuration...")
+	activeRoot := u.Scheme.Root1Partition
+	if !u.Active {
+		activeRoot = u.Scheme.Root2Partition
+	}
+	if err := MergeEtcFromActive(u.Config.MountPoint, activeRoot, u.Config.DryRun); err != nil {
+		return fmt.Errorf("failed to merge /etc: %w", err)
+	}
+
+	// Step 5: Setup system directories
+	fmt.Println("\nStep 5/6: Setting up system directories...")
 	if err := SetupSystemDirectories(u.Config.MountPoint); err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	// Step 5: Update bootloader configuration
-	fmt.Println("\nStep 5/5: Updating bootloader configuration...")
+	// Step 6: Update bootloader configuration
+	fmt.Println("\nStep 6/6: Updating bootloader configuration...")
 	if err := u.UpdateBootloader(); err != nil {
 		return fmt.Errorf("failed to update bootloader: %w", err)
 	}

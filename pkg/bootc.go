@@ -181,6 +181,11 @@ func (b *BootcInstaller) Install() error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
+	// Save pristine /etc for future updates
+	if err := SavePristineEtc(b.MountPoint, b.DryRun); err != nil {
+		return fmt.Errorf("failed to save pristine /etc: %w", err)
+	}
+
 	// Write system configuration
 	config := &SystemConfig{
 		ImageRef:       b.ImageRef,

@@ -334,7 +334,7 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + rootUUID,
-		"ro",
+		"rw",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
@@ -347,7 +347,7 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 	loaderConf := `default bootc
 timeout 5
 console-mode max
-editor no
+editor yes
 `
 	loaderConfPath := filepath.Join(loaderDir, "loader.conf")
 	if err := os.WriteFile(loaderConfPath, []byte(loaderConf), 0644); err != nil {

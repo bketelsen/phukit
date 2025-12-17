@@ -595,9 +595,9 @@ if [ "$boot_success" = true ]; then
     echo "    Partition mounts:"
     incus exec ${BOOT_VM_NAME} -- df -h / /boot /var 2>/dev/null | sed 's/^/      /' || echo "      Could not query mounts"
 
-    # Stop and delete the boot test VM
-    incus stop ${BOOT_VM_NAME} --force
-    incus delete ${BOOT_VM_NAME} --force
+    # # Stop and delete the boot test VM
+    # incus stop ${BOOT_VM_NAME} --force
+    # incus delete ${BOOT_VM_NAME} --force
 
     echo -e "${GREEN}✓ Boot test successful - system is bootable${NC}\n"
 else

@@ -145,8 +145,13 @@ func extractTar(r io.Reader, targetDir string) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+			if err := os.MkdirAll(target, 0755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", target, err)
+			}
+			// Set ownership and mode for directory
+			_ = os.Lchown(target, header.Uid, header.Gid)
+			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to set mode on directory %s: %w", target, err)
 			}
 
 		case tar.TypeReg:
@@ -155,8 +160,8 @@ func extractTar(r io.Reader, targetDir string) error {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
 
-			// Create and write file
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			// Create and write file with basic permissions first
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", target, err)
 			}
@@ -166,6 +171,14 @@ func extractTar(r io.Reader, targetDir string) error {
 				return fmt.Errorf("failed to write file %s: %w", target, err)
 			}
 			f.Close()
+
+			// Set ownership first (this may clear SUID/SGID bits)
+			_ = os.Lchown(target, header.Uid, header.Gid)
+
+			// Then set the full mode including SUID/SGID/sticky bits
+			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to set mode on file %s: %w", target, err)
+			}
 
 		case tar.TypeSymlink:
 			// Remove existing file/link if it exists
@@ -190,6 +203,8 @@ func extractTar(r io.Reader, targetDir string) error {
 			if err := os.Symlink(header.Linkname, target); err != nil {
 				return fmt.Errorf("failed to create symlink %s: %w", target, err)
 			}
+			// Set ownership on symlink (may fail without root, but that's okay)
+			_ = os.Lchown(target, header.Uid, header.Gid)
 
 		case tar.TypeLink:
 			// Hard link
@@ -200,10 +215,12 @@ func extractTar(r io.Reader, targetDir string) error {
 					return fmt.Errorf("failed to create hard link or copy %s: %w", target, err)
 				}
 			}
+			// Set ownership and mode for hard link
+			_ = os.Lchown(target, header.Uid, header.Gid)
+			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to set mode on hard link %s: %w", target, err)
+			}
 		}
-
-		// Set ownership (may fail without root, but that's okay)
-		_ = os.Lchown(target, header.Uid, header.Gid)
 	}
 
 	return nil

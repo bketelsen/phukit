@@ -542,3 +542,4 @@ Always double-check the device path before running install commands. Use `--dry-
 
 * someone ought to actually test this
 * root mount RO
+* export container as squashfs/erofs/similar, mount that instead of fs copy

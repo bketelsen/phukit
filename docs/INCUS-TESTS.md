@@ -41,9 +41,33 @@ sudo make test-incus
 
 # Or run the script directly with preserved PATH
 sudo -E env "PATH=$PATH" ./test_incus.sh
+
+# Use a custom/private container image
+TEST_IMAGE=ghcr.io/myorg/myimage:latest sudo -E ./test_incus.sh
 ```
 
 **Important**: The test requires `go` and `make` to be in PATH. The Makefile target automatically preserves your PATH when running with sudo. If running the script directly, use `sudo -E env "PATH=$PATH"` to ensure all tools are available.
+
+### Using Private Container Images
+
+By default, tests use `quay.io/centos-bootc/centos-bootc:stream9` (public image).
+
+To test with a private image:
+
+1. **Login to the registry**:
+
+   ```bash
+   docker login ghcr.io
+   # or
+   podman login ghcr.io
+   ```
+
+2. **Run tests with your image**:
+   ```bash
+   TEST_IMAGE=ghcr.io/myorg/myimage:latest sudo -E ./test_incus.sh
+   ```
+
+The test will use credentials from `~/.docker/config.json` automatically.
 
 ## What Gets Tested
 
@@ -114,7 +138,7 @@ Each test run:
 
 - Creates a fresh Fedora 40 VM
 - Attaches a 60GB virtual disk
-- Installs required tools (podman, grub2, gdisk, etc.)
+- Installs required tools (grub2, gdisk, etc.)
 - Copies phukit binary to VM
 - Runs all tests
 - Cleans up VM and resources automatically

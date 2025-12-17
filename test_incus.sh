@@ -1,6 +1,10 @@
 #!/bin/bash
 # Integration tests for phukit using Incus virtual machines
-# Requires: incus, podman, root privileges
+# Requires: incus, root privileges
+#
+# For private container images:
+#   Set TEST_IMAGE env var: TEST_IMAGE=ghcr.io/myorg/myimage:latest sudo -E ./test_incus.sh
+#   Ensure ~/.docker/config.json has valid credentials (from 'docker login' or 'podman login')
 
 set -e
 
@@ -14,7 +18,13 @@ NC='\033[0m' # No Color
 # Test configuration
 VM_NAME="phukit-test-$$"
 DISK_SIZE="60GB"
-TEST_IMAGE="ghcr.io/bketelsen/debian-bootc-core:latest"
+# Use a public bootc image for testing
+# Options:
+#   quay.io/centos-bootc/centos-bootc:stream9 (CentOS Stream 9)
+#   quay.io/fedora/fedora-bootc:40 (Fedora 40)
+# Or set TEST_IMAGE env var to use your own image (may require authentication)
+#TEST_IMAGE="${TEST_IMAGE:-quay.io/fedora/fedora-bootc:42}"
+TEST_IMAGE="${TEST_IMAGE:-ghcr.io/frostyard/snow:latest}"
 BUILD_DIR="/tmp/phukit-test-build-$$"
 TIMEOUT=1200  # 20 minutes
 
@@ -40,11 +50,11 @@ cleanup() {
         incus delete ${VM_NAME} --force 2>/dev/null || true
     fi
 
-    # Remove storage volume if exists
-    if incus storage volume list default --format csv | grep -q "^custom,${VM_NAME}-disk,"; then
-        echo "Deleting storage volume: ${VM_NAME}-disk"
-        incus storage volume delete default ${VM_NAME}-disk 2>/dev/null || true
-    fi
+    # # Remove storage volume if exists
+    # if incus storage volume list default --format csv | grep -q "^custom,${VM_NAME}-disk,"; then
+    #     echo "Deleting storage volume: ${VM_NAME}-disk"
+    #     incus storage volume delete default ${VM_NAME}-disk 2>/dev/null || true
+    # fi
 
     # Remove build directory
     if [ -d "$BUILD_DIR" ]; then
@@ -61,7 +71,7 @@ trap cleanup EXIT INT TERM
 
 # Check required tools
 echo -e "${YELLOW}Checking required tools...${NC}"
-REQUIRED_TOOLS="incus podman go make"
+REQUIRED_TOOLS="incus go make"
 MISSING_TOOLS=""
 
 for tool in $REQUIRED_TOOLS; do
@@ -142,7 +152,7 @@ sleep 5
 # Install required tools in VM
 echo -e "${BLUE}=== Installing tools in VM ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
-    dnf install -y podman grub2-efi-x64 grub2-tools gdisk util-linux e2fsprogs dosfstools parted rsync
+    dnf install -y gdisk util-linux e2fsprogs dosfstools parted rsync
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}Tools installed${NC}\n"
 
@@ -152,11 +162,10 @@ incus file push "$BUILD_DIR/phukit" ${VM_NAME}/usr/local/bin/phukit
 incus exec ${VM_NAME} -- chmod +x /usr/local/bin/phukit
 echo -e "${GREEN}Binary copied${NC}\n"
 
-# Pull test container image in the VM
-echo -e "${BLUE}=== Pulling test container image in VM ===${NC}"
-echo "Image: $TEST_IMAGE"
-incus exec ${VM_NAME} -- podman pull "$TEST_IMAGE" 2>&1 | sed 's/^/  /'
-echo -e "${GREEN}Image pulled${NC}\n"
+# Note: Image will be pulled automatically by phukit during installation
+echo -e "${BLUE}Using test image: $TEST_IMAGE${NC}"
+echo "  (Image will be pulled during installation)"
+echo ""
 
 # Find the test disk device in the VM
 echo -e "${BLUE}=== Identifying test disk ===${NC}"
@@ -209,6 +218,8 @@ set +e
 timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit install \
     --image '$TEST_IMAGE' \
     --device '$TEST_DISK' \
+    --karg 'loglevel=7' \
+    --karg 'systemd.journald.forward_to_console=1' \
     --verbose" 2>&1 | tee /tmp/phukit-install-$$.log | sed 's/^/  /'
 INSTALL_EXIT=${PIPESTATUS[0]}
 set -e
@@ -597,8 +608,8 @@ else
     incus console ${BOOT_VM_NAME} --show-log 2>/dev/null | tail -50 | sed 's/^/    /' || echo "    Console log not available"
 
     # Cleanup
-    incus stop ${BOOT_VM_NAME} --force 2>/dev/null || true
-    incus delete ${BOOT_VM_NAME} --force 2>/dev/null || true
+    # incus stop ${BOOT_VM_NAME} --force 2>/dev/null || true
+    # incus delete ${BOOT_VM_NAME} --force 2>/dev/null || true
 
     exit 1
 fi

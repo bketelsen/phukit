@@ -25,7 +25,7 @@ The `phukit update` command implements an A/B (dual root) update system that ena
 
 2. **Pull New Image**
 
-   - Downloads the latest container image using podman
+   - Downloads the latest container image using go-containerregistry
 
 3. **Extract to Inactive Partition**
 

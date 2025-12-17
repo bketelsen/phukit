@@ -6,6 +6,10 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // BootcInstaller handles bootc container installation
@@ -48,19 +52,15 @@ func (b *BootcInstaller) SetMountPoint(mountPoint string) {
 	b.MountPoint = mountPoint
 }
 
-// CheckPodmanAvailable checks if podman is available
+// CheckPodmanAvailable is deprecated - container operations now use go-containerregistry
+// Kept for backwards compatibility but does nothing
 func CheckPodmanAvailable() error {
-	cmd := exec.Command("podman", "--version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("podman is not available: %w", err)
-	}
 	return nil
 }
 
 // CheckRequiredTools checks if required tools are available
 func CheckRequiredTools() error {
 	tools := []string{
-		"podman",
 		"sgdisk",
 		"mkfs.vfat",
 		"mkfs.ext4",
@@ -91,29 +91,34 @@ func CheckRequiredTools() error {
 	return nil
 }
 
-// PullImage pulls the container image
+// PullImage validates the image reference and checks if it's accessible
+// The actual image pull happens during Extract() to avoid duplicate work
 func (b *BootcInstaller) PullImage() error {
 	if b.DryRun {
 		fmt.Printf("[DRY RUN] Would pull image: %s\n", b.ImageRef)
 		return nil
 	}
 
-	fmt.Printf("Pulling image: %s\n", b.ImageRef)
+	fmt.Printf("Validating image reference: %s\n", b.ImageRef)
 
-	args := []string{"pull"}
+	// Parse and validate the image reference
+	ref, err := name.ParseReference(b.ImageRef)
+	if err != nil {
+		return fmt.Errorf("invalid image reference: %w", err)
+	}
+
 	if b.Verbose {
-		args = append(args, "--log-level=debug")
-	}
-	args = append(args, b.ImageRef)
-
-	cmd := exec.Command("podman", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to pull image: %w", err)
+		fmt.Printf("  Image: %s\n", ref.String())
 	}
 
+	// Try to get image descriptor to verify it exists and is accessible
+	// This is a lightweight check that doesn't download layers
+	_, err = remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return fmt.Errorf("failed to access image: %w (check credentials if private registry)", err)
+	}
+
+	fmt.Println("  Image reference is valid and accessible")
 	return nil
 }
 

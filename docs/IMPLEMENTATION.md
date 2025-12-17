@@ -16,7 +16,7 @@ Successfully refactored `phukit` to perform bootc-compatible container installat
 
 2. **[pkg/container.go](pkg/container.go)** - Container filesystem extraction
 
-   - Extracts container images using podman export/import
+   - Extracts container images using go-containerregistry (pure Go, no external dependencies)
    - Creates system directories and fstab
    - Supports chroot operations for post-install configuration
 
@@ -57,8 +57,8 @@ The complete installation workflow (6 steps):
    └─ Mount EFI → /tmp/phukit-install/boot/efi
 
 4. Extract Container
-   ├─ podman create <image>
-   ├─ podman export | tar -x
+   ├─ Pull image layers via go-containerregistry
+   ├─ Extract layers to filesystem
    └─ Extract filesystem to mounted root
 
 5. Configure System
@@ -212,7 +212,7 @@ Potential improvements:
 
 ### Required Tools
 
-- `podman` - Container operations
+- `go-containerregistry` (embedded) - Container image operations
 - `sgdisk` - GPT partitioning
 - `mkfs.vfat` - FAT32 formatting
 - `mkfs.ext4` - ext4 formatting

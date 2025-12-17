@@ -109,11 +109,12 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 
 Before using `phukit`, ensure you have the following installed:
 
-- **podman**: Container runtime for pulling container images
 - **sgdisk**: GPT partition table manipulation tool (usually in `gdisk` package)
 - **mkfs tools**: `mkfs.vfat`, `mkfs.ext4` for filesystem creation
 - **GRUB2**: `grub-install` or `grub2-install` for bootloader installation
 - **Root privileges**: Required for disk operations
+
+**Note**: Container image handling is built-in using [go-containerregistry](https://github.com/google/go-containerregistry). No external container runtime (podman/docker) is required!
 
 ### System Requirements
 
@@ -297,9 +298,9 @@ This layout enables:
 
 The initial installation follows these steps:
 
-1. **Prerequisites Check**: Verifies required tools (podman, sgdisk, mkfs, grub) are available
+1. **Prerequisites Check**: Verifies required tools (sgdisk, mkfs, grub) are available
 2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted)
-3. **Image Pull**: Downloads the container image using podman (unless `--skip-pull` is used)
+3. **Image Pull**: Downloads the container image using built-in Go libraries (unless `--skip-pull` is used)
 4. **Confirmation**: Prompts user to confirm data destruction (unless `--force` is used)
 5. **Disk Wipe**: Removes existing partition tables and filesystem signatures
 6. **Partitioning**: Creates the 5-partition GPT layout
@@ -521,7 +522,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-- [podman](https://podman.io/) - Container runtime for OCI images
+- [go-containerregistry](https://github.com/google/go-containerregistry) - Pure Go library for working with container images
 - [Cobra](https://github.com/spf13/cobra) - CLI framework
 - [Viper](https://github.com/spf13/viper) - Configuration management
 - [GRUB2](https://www.gnu.org/software/grub/) - Bootloader
@@ -529,7 +530,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Related Projects
 
 - [bootc](https://github.com/containers/bootc) - Transactional, in-place operating system updates using OCI/Docker container images
-- [podman](https://github.com/containers/podman) - Tool for managing OCI containers and pods
+- [go-containerregistry](https://github.com/google/go-containerregistry) - Go library for working with container registries
 - [OSTree](https://github.com/ostreedev/ostree) - Operating system and container image management
 
 ## Warning
@@ -540,6 +541,6 @@ Always double-check the device path before running install commands. Use `--dry-
 
 ## Missing / Planned Features
 
-* someone ought to actually test this
-* root mount RO
-* export container as squashfs/erofs/similar, mount that instead of fs copy
+- someone ought to actually test this
+- root mount RO
+- export container as squashfs/erofs/similar, mount that instead of fs copy

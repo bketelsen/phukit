@@ -6,6 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // GetActiveRootPartition determines which root partition is currently active
@@ -195,29 +199,33 @@ func (u *SystemUpdater) PrepareUpdate() error {
 	return nil
 }
 
-// PullImage pulls the container image
+// PullImage validates the image reference and checks if it's accessible
+// The actual image pull happens during Extract() to avoid duplicate work
 func (u *SystemUpdater) PullImage() error {
 	if u.Config.DryRun {
 		fmt.Printf("[DRY RUN] Would pull image: %s\n", u.Config.ImageRef)
 		return nil
 	}
 
-	fmt.Printf("Pulling image: %s\n", u.Config.ImageRef)
+	fmt.Printf("Validating image reference: %s\n", u.Config.ImageRef)
 
-	args := []string{"pull"}
+	// Parse and validate the image reference
+	ref, err := name.ParseReference(u.Config.ImageRef)
+	if err != nil {
+		return fmt.Errorf("invalid image reference: %w", err)
+	}
+
 	if u.Config.Verbose {
-		args = append(args, "--log-level=debug")
-	}
-	args = append(args, u.Config.ImageRef)
-
-	cmd := exec.Command("podman", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to pull image: %w", err)
+		fmt.Printf("  Image: %s\n", ref.String())
 	}
 
+	// Try to get image descriptor to verify it exists and is accessible
+	_, err = remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return fmt.Errorf("failed to access image: %w (check credentials if private registry)", err)
+	}
+
+	fmt.Println("  Image reference is valid and accessible")
 	return nil
 }
 

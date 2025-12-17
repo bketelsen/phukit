@@ -1,11 +1,16 @@
 package pkg
 
 import (
+	"archive/tar"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // ContainerExtractor handles extracting container images to disk
@@ -28,66 +33,179 @@ func (c *ContainerExtractor) SetVerbose(verbose bool) {
 	c.Verbose = verbose
 }
 
-// Extract extracts the container filesystem to the target directory
+// Extract extracts the container filesystem to the target directory using go-containerregistry
 func (c *ContainerExtractor) Extract() error {
 	fmt.Printf("Extracting container image %s...\n", c.ImageRef)
 
-	// Create a temporary container
-	containerName := "phukit-extract-" + strings.ReplaceAll(strings.ReplaceAll(c.ImageRef, "/", "-"), ":", "-")
-
-	// Remove any existing container with the same name
-	_ = exec.Command("podman", "rm", "-f", containerName).Run()
-
-	// Create container from image
-	fmt.Println("  Creating temporary container...")
-	cmd := exec.Command("podman", "create", "--name", containerName, c.ImageRef, "/bin/sh")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create container: %w\nOutput: %s", err, string(output))
-	}
-
-	// Ensure cleanup
-	defer func() {
-		if c.Verbose {
-			fmt.Println("  Cleaning up temporary container...")
-		}
-		_ = exec.Command("podman", "rm", "-f", containerName).Run()
-	}()
-
-	// Export container filesystem
-	fmt.Println("  Exporting container filesystem...")
-	cmd = exec.Command("podman", "export", containerName)
-	exportOutput, err := cmd.StdoutPipe()
+	// Parse image reference
+	ref, err := name.ParseReference(c.ImageRef)
 	if err != nil {
-		return fmt.Errorf("failed to create export pipe: %w", err)
+		return fmt.Errorf("failed to parse image reference: %w", err)
 	}
 
-	// Extract to target directory using tar
-	tarCmd := exec.Command("tar", "-xf", "-", "-C", c.TargetDir)
-	tarCmd.Stdin = exportOutput
-	if c.Verbose {
-		tarCmd.Stdout = os.Stdout
-		tarCmd.Stderr = os.Stderr
+	// Pull image
+	fmt.Println("  Pulling image...")
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return fmt.Errorf("failed to pull image: %w", err)
 	}
 
-	// Start both commands
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start export: %w", err)
+	// Get image layers
+	fmt.Println("  Extracting layers...")
+	layers, err := img.Layers()
+	if err != nil {
+		return fmt.Errorf("failed to get image layers: %w", err)
 	}
 
-	if err := tarCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start tar: %w", err)
-	}
+	// Extract each layer
+	for i, layer := range layers {
+		if c.Verbose {
+			digest, _ := layer.Digest()
+			fmt.Printf("  Extracting layer %d/%d (%s)...\n", i+1, len(layers), digest)
+		}
 
-	// Wait for both to complete
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("export failed: %w", err)
-	}
+		// Get layer contents as tar stream
+		rc, err := layer.Uncompressed()
+		if err != nil {
+			return fmt.Errorf("failed to decompress layer %d: %w", i, err)
+		}
 
-	if err := tarCmd.Wait(); err != nil {
-		return fmt.Errorf("tar extraction failed: %w", err)
+		// Extract tar contents to target directory
+		if err := extractTar(rc, c.TargetDir); err != nil {
+			rc.Close()
+			return fmt.Errorf("failed to extract layer %d: %w", i, err)
+		}
+		rc.Close()
 	}
 
 	fmt.Println("Container filesystem extracted successfully")
+	return nil
+}
+
+// extractTar extracts a tar stream to a target directory
+func extractTar(r io.Reader, targetDir string) error {
+	tr := tar.NewReader(r)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+
+		target := filepath.Join(targetDir, header.Name)
+
+		// Ensure target is within targetDir (prevent path traversal)
+		if !filepath.HasPrefix(filepath.Clean(target), filepath.Clean(targetDir)) {
+			continue
+		}
+
+		// Handle whiteouts (deleted files in overlay filesystems)
+		// Whiteouts are special files with .wh. prefix indicating deletion
+		base := filepath.Base(header.Name)
+		dir := filepath.Dir(header.Name)
+
+		// Opaque whiteout: .wh..wh..opq means "delete all files in this directory"
+		if base == ".wh..wh..opq" {
+			// Remove all contents of the directory
+			targetDir := filepath.Join(targetDir, dir)
+			// if the targetDir contains "efi" just skip it to avoid deleting efi contents
+			fmt.Println("    Processing opaque whiteout for directory:", base, targetDir)
+			if filepath.Base(targetDir) == "efi" {
+				continue
+			}
+			if filepath.Base(targetDir) == "boot" {
+				continue
+			}
+			if err := os.RemoveAll(targetDir); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to clear directory for opaque whiteout %s: %w", targetDir, err)
+			}
+			// Recreate the directory
+			if err := os.MkdirAll(targetDir, 0755); err != nil {
+				return fmt.Errorf("failed to recreate directory after opaque whiteout %s: %w", targetDir, err)
+			}
+			continue
+		}
+
+		// Regular whiteout: .wh.filename means "delete filename"
+		if len(base) > 4 && base[:4] == ".wh." {
+			fmt.Println("    Processing whiteout for file:", base, dir)
+
+			// The whiteout indicates we should delete the file it references
+			originalName := base[4:] // Remove .wh. prefix
+			whiteoutTarget := filepath.Join(targetDir, dir, originalName)
+			// Remove the file/directory that this whiteout references
+			if err := os.RemoveAll(whiteoutTarget); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove whiteout target %s: %w", whiteoutTarget, err)
+			}
+			continue
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", target, err)
+			}
+
+		case tar.TypeReg:
+			// Create parent directory if it doesn't exist
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return fmt.Errorf("failed to create parent directory: %w", err)
+			}
+
+			// Create and write file
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", target, err)
+			}
+
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return fmt.Errorf("failed to write file %s: %w", target, err)
+			}
+			f.Close()
+
+		case tar.TypeSymlink:
+			// Remove existing file/link if it exists
+
+			// check to see if the target is a file or directory
+			info, err := os.Lstat(target)
+			if err == nil {
+				if info.IsDir() {
+					if err := os.RemoveAll(target); err != nil {
+						return fmt.Errorf("failed to remove existing directory %s: %w", target, err)
+					}
+				} else {
+					if err := os.Remove(target); err != nil {
+						return fmt.Errorf("failed to remove existing file %s: %w", target, err)
+					}
+				}
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to stat existing file %s: %w", target, err)
+			}
+
+			// Create symlink
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return fmt.Errorf("failed to create symlink %s: %w", target, err)
+			}
+
+		case tar.TypeLink:
+			// Hard link
+			linkTarget := filepath.Join(targetDir, header.Linkname)
+			if err := os.Link(linkTarget, target); err != nil {
+				// If hard link fails, try copying the file
+				if err := copyFile(linkTarget, target); err != nil {
+					return fmt.Errorf("failed to create hard link or copy %s: %w", target, err)
+				}
+			}
+		}
+
+		// Set ownership (may fail without root, but that's okay)
+		_ = os.Lchown(target, header.Uid, header.Gid)
+	}
+
 	return nil
 }
 

@@ -520,6 +520,89 @@ incus exec ${VM_NAME} -- bash -c "
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Kernel and initramfs verified${NC}\n"
 
+# Test 11: Boot from installed disk
+echo -e "${BLUE}=== Test 11: Boot Test ===${NC}"
+echo "Creating new VM to boot from installed disk..."
+
+# Detach disk from current VM
+incus storage volume detach default ${VM_NAME}-disk ${VM_NAME}
+echo "  Detached disk from test VM"
+
+# Create new VM for boot test (empty, no base image)
+BOOT_VM_NAME="${VM_NAME}-boot"
+incus create ${BOOT_VM_NAME} --vm --empty \
+    -c limits.cpu=2 \
+    -c limits.memory=4GiB \
+    -c security.secureboot=false
+
+echo "  Created empty boot test VM: ${BOOT_VM_NAME}"
+
+# Attach the installed disk as the primary boot disk
+# incus storage volume attach default ${VM_NAME}-disk ${BOOT_VM_NAME}
+#echo "  Attached installed disk to boot VM"
+
+incus config device add ${BOOT_VM_NAME} bootable disk pool=default source=${VM_NAME}-disk boot.priority=10
+echo "  Configured boot disk for VM"
+# Start the VM and try to boot from the installed disk
+echo "  Starting VM with installed disk..."
+incus start ${BOOT_VM_NAME}
+
+# Wait for the system to boot (give it up to 2 minutes)
+echo "  Waiting for system to boot (timeout: 120s)..."
+boot_timeout=120
+boot_success=false
+
+while [ $boot_timeout -gt 0 ]; do
+    # Try to execute a simple command to see if system is up
+    if incus exec ${BOOT_VM_NAME} -- true 2>/dev/null; then
+        boot_success=true
+        echo "  System responded after $((120 - boot_timeout)) seconds"
+        break
+    fi
+    echo -n "."
+    sleep 2
+    boot_timeout=$((boot_timeout - 2))
+done
+echo ""
+
+if [ "$boot_success" = true ]; then
+    # Run some basic verification commands
+    echo "  Verifying booted system..."
+
+    # Check kernel version
+    KERNEL_VERSION=$(incus exec ${BOOT_VM_NAME} -- uname -r 2>/dev/null || echo "unknown")
+    echo "    Kernel: ${KERNEL_VERSION}"
+
+    # Check if phukit config exists
+    if incus exec ${BOOT_VM_NAME} -- test -f /etc/phukit/config.json 2>/dev/null; then
+        echo "    ✓ Phukit configuration found"
+    else
+        echo "    ✗ Phukit configuration missing"
+    fi
+
+    # Check partition mounts
+    echo "    Partition mounts:"
+    incus exec ${BOOT_VM_NAME} -- df -h / /boot /var 2>/dev/null | sed 's/^/      /' || echo "      Could not query mounts"
+
+    # Stop and delete the boot test VM
+    incus stop ${BOOT_VM_NAME} --force
+    incus delete ${BOOT_VM_NAME} --force
+
+    echo -e "${GREEN}✓ Boot test successful - system is bootable${NC}\n"
+else
+    echo -e "${RED}✗ Boot test failed - system did not boot within timeout${NC}"
+
+    # Try to get console output for debugging
+    echo "  Console output:"
+    incus console ${BOOT_VM_NAME} --show-log 2>/dev/null | tail -50 | sed 's/^/    /' || echo "    Console log not available"
+
+    # Cleanup
+    incus stop ${BOOT_VM_NAME} --force 2>/dev/null || true
+    incus delete ${BOOT_VM_NAME} --force 2>/dev/null || true
+
+    exit 1
+fi
+
 # Summary
 echo -e "${GREEN}=== All Tests Passed ===${NC}\n"
 echo -e "${BLUE}Test Summary:${NC}"
@@ -533,5 +616,6 @@ echo "  ✓ System update (A/B partition)"
 echo "  ✓ Verify both A/B partitions"
 echo "  ✓ Verify boot entries (GRUB/systemd-boot)"
 echo "  ✓ Verify kernel and initramfs (boot/EFI partition)"
+echo "  ✓ Boot test - system is bootable"
 echo ""
 echo -e "${GREEN}Integration tests completed successfully!${NC}"

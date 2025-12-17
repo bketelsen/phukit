@@ -15,9 +15,13 @@ var (
 		Short: "A bootc container installer for physical disks",
 		Long: `phukit is a tool for installing bootc compatible containers to physical disks.
 It automates the process of preparing disks and deploying bootable container images.`,
-		Version: "0.1.0",
 	}
 )
+
+// SetVersion sets the version for the root command
+func SetVersion(version string) {
+	rootCmd.Version = version
+}
 
 // Execute runs the root command
 func Execute() error {

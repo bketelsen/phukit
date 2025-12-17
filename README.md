@@ -2,23 +2,108 @@
 
 [![Tests](https://github.com/bketelsen/phukit/actions/workflows/test.yml/badge.svg)](https://github.com/bketelsen/phukit/actions/workflows/test.yml)
 
-A Go application for installing bootc compatible containers to physical disks.
+A Go application for installing bootc-compatible containers to physical disks with A/B partitioning and atomic updates.
 
 ## Overview
 
 `phukit` is a command-line tool that installs bootc-compatible container images directly to physical disks. It handles the complete installation process including partitioning, filesystem creation, container extraction, and bootloader installation - all without requiring the `bootc` command itself.
+
+The tool implements an A/B partition scheme for safe, atomic system updates with automatic rollback capability.
+
+## Source Image Requirements
+
+For successful installation and updates, the source container image must meet the following requirements:
+
+### Kernel and Initramfs Location
+
+The kernel and initramfs files **must** be located in `/usr/lib/modules/$KERNEL_VERSION/` within the container image:
+
+- **Kernel**: `/usr/lib/modules/$KERNEL_VERSION/vmlinuz` or `/usr/lib/modules/$KERNEL_VERSION/vmlinuz-$KERNEL_VERSION`
+- **Initramfs**: One of the following in the same directory:
+  - `/usr/lib/modules/$KERNEL_VERSION/initramfs.img`
+  - `/usr/lib/modules/$KERNEL_VERSION/initrd.img`
+  - `/usr/lib/modules/$KERNEL_VERSION/initramfs-$KERNEL_VERSION.img`
+  - `/usr/lib/modules/$KERNEL_VERSION/initrd.img-$KERNEL_VERSION`
+
+During installation or update, `phukit` will automatically copy these files from `/usr/lib/modules/$KERNEL_VERSION/` to the shared `/boot` partition.
+
+### Filesystem Structure
+
+The container image should follow standard Linux Filesystem Hierarchy Standard (FHS):
+
+- `/usr`: System binaries and libraries (read-only in production)
+- `/etc`: Configuration files (will be managed with 3-way merge during updates)
+- `/var`: Variable data (symlinked to shared partition)
+- `/home`: User home directories (symlinked to `/var/home`)
+- `/root`: Root user home directory (symlinked to `/var/roothome`)
+- `/opt`: Optional packages
+- `/srv`: Service data (symlinked to `/var/srv`)
+- `/tmp`: Temporary files (mounted as tmpfs at runtime)
+
+### Required System Components
+
+The image should contain:
+
+- **Linux kernel modules** in `/usr/lib/modules/$KERNEL_VERSION/`
+- **System libraries** in `/usr/lib` and `/usr/lib64`
+- **Essential binaries** in `/usr/bin` and `/usr/sbin`
+- **Basic system configuration** in `/etc`
+
+### Optional but Recommended
+
+- **systemd**: For service management and system initialization
+- **NetworkManager** or similar for network configuration
+- **SSH server**: For remote access
+- **Package manager**: For installing additional software after deployment
+
+### Example Image Structure
+
+```
+/
+├── usr/
+│   ├── bin/
+│   ├── lib/
+│   ├── lib64/
+│   └── lib/modules/
+│       └── 6.11.0-1.el9.x86_64/
+│           ├── vmlinuz
+│           ├── initramfs.img
+│           └── kernel/
+├── etc/
+│   ├── fstab
+│   ├── hostname
+│   └── systemd/
+├── var/  (will be symlinked to shared partition)
+├── home/  (will be symlinked to /var/home)
+└── root/  (will be symlinked to /var/roothome)
+```
+
+### Building Compatible Images
+
+To create a compatible bootc image, ensure your Containerfile/Dockerfile includes kernel installation:
+
+```dockerfile
+FROM quay.io/centos/centos:stream9
+
+# Install kernel and other packages
+RUN dnf install -y kernel kernel-modules initramfs-tools
+
+# Kernel and initramfs will be in /usr/lib/modules/$(uname -r)/
+# No need to manually move them - phukit handles the extraction
+```
 
 ## Features
 
 - 🔍 **Disk Discovery**: List and inspect available physical disks
 - ✅ **Validation**: Verify disks are suitable for installation
 - 🚀 **Automated Installation**: Complete installation workflow with safety checks
-- � **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
+- 🔄 **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
 - 🔧 **Kernel Arguments**: Support for custom kernel arguments
-- 🏷️ **Multiple Device Types**: Supports SATA (sd*), NVMe (nvme*), virtio (vd\*), and MMC devices
-- 🛡️ **Safety Features**: Confirmation prompts and dry-run mode
+- 💾 **/etc Persistence**: Three-way merge preserves user configuration across updates
+- 🏷️ **Multiple Device Types**: Supports SATA (sd\*), NVMe (nvme\*), virtio (vd\*), and MMC devices
+- 🛡️ **Safety Features**: Confirmation prompts and force flag for automation
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
-- 💾 **Configuration Persistence**: Stores image reference for easy updates
+- 🔐 **Configuration Storage**: Stores image reference for easy updates
 
 ## Prerequisites
 
@@ -32,9 +117,10 @@ Before using `phukit`, ensure you have the following installed:
 
 ### System Requirements
 
-- Linux operating system
-- 64-bit architecture
+- Linux operating system (tested on Fedora, Ubuntu, CentOS Stream)
+- x86_64 or ARM64 architecture
 - Root/sudo access for disk operations
+- Minimum 50GB disk space (43GB for system partitions + space for /var)
 
 ## Installation
 
@@ -42,30 +128,29 @@ Before using `phukit`, ensure you have the following installed:
 
 ```bash
 # Clone the repository
-git clone https://github.com/frostyard/phukit.git
+git clone https://github.com/bketelsen/phukit.git
 cd phukit
 
 # Build the binary
-./build.sh
-
-# Or use go directly
-go build -o phukit .
+make build
 
 # Install to system (optional)
-sudo cp phukit /usr/local/bin/
+sudo make install
 ```
 
-### Using Docker
+### From Release
+
+Download the latest release from [GitHub Releases](https://github.com/bketelsen/phukit/releases):
 
 ```bash
-# Build the Docker image
-docker build -t phukit .
+# Download for your architecture
+curl -LO https://github.com/bketelsen/phukit/releases/latest/download/phukit-linux-amd64
 
-# Run with necessary privileges
-docker run --rm --privileged \
-  -v /dev:/dev \
-  -v /var/lib/containers:/var/lib/containers \
-  phukit --help
+# Make executable
+chmod +x phukit-linux-amd64
+
+# Install
+sudo mv phukit-linux-amd64 /usr/local/bin/phukit
 ```
 
 ## Usage
@@ -112,7 +197,7 @@ phukit validate -d /dev/disk/by-id/ata-Samsung_SSD_850
 
 ### Install to Disk
 
-````bash
+```bash
 # Basic installation
 phukit install \
   --image quay.io/centos-bootc/centos-bootc:stream9 \
@@ -131,12 +216,20 @@ phukit install \
   --device /dev/sda \
   --skip-pull
 
+# Skip confirmation prompt (for automation)
+phukit install \
+  --image quay.io/example/image:latest \
+  --device /dev/sda \
+  --force
+
 # Dry run (test without making changes)
 phukit install \
   --image quay.io/example/image:latest \
   --device /dev/sda \
   --dry-run
-```Update System
+```
+
+### Update System
 
 The A/B update system allows you to safely update your system by installing to an inactive root partition:
 
@@ -151,20 +244,23 @@ phukit update \
 
 # Skip pulling (use already pulled image)
 phukit update \
-  --image localhost/my-image \
+  --image localhost/my-image:latest \
   --device /dev/sda \
   --skip-pull
+
+# Force update without confirmation
+phukit update \
+  --device /dev/sda \
+  --force
 
 # Add custom kernel arguments for the new system
 phukit update \
   --device /dev/sda \
   --karg console=ttyS0 \
   --karg debug
-````
+```
 
 After update, reboot to activate the new system. The previous version remains available in the boot menu for rollback.
-
-###
 
 ### Global Flags
 
@@ -174,6 +270,10 @@ phukit install --image IMAGE --device DEVICE -v
 
 # Dry run mode (no actual changes)
 phukit install --image IMAGE --device DEVICE --dry-run
+```
+
+## How It Works
+
 `phukit` performs a native installation without requiring the `bootc` command. The system is designed with A/B partitioning for safe, atomic updates.
 
 ### A/B Partitioning Scheme
@@ -181,14 +281,15 @@ phukit install --image IMAGE --device DEVICE --dry-run
 `phukit` creates a GPT partition table with dual root partitions for atomic updates:
 
 1. **EFI System Partition** (2GB, FAT32): UEFI boot files and bootloader
-2. **Boot Partition** (1GB, ext4): Shared kernel and initramfs
+2. **Boot Partition** (1GB, ext4): Shared kernel and initramfs files
 3. **Root Partition 1** (20GB, ext4): First root filesystem (OS A)
 4. **Root Partition 2** (20GB, ext4): Second root filesystem (OS B)
 5. **Var Partition** (remaining space, ext4): Shared `/var` for both systems
 
 This layout enables:
+
 - **Atomic Updates**: Install new version to inactive partition without affecting running system
-- **Safe Rollback**: Previous system remains bootable in case of issues
+- **Safe Rollback**: Previous system remains bootable via GRUB menu
 - **Shared Data**: `/var` partition shared between both systems for persistent data
 - **Zero Downtime**: Switch between versions with a simple reboot
 
@@ -198,33 +299,78 @@ The initial installation follows these steps:
 
 1. **Prerequisites Check**: Verifies required tools (podman, sgdisk, mkfs, grub) are available
 2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted)
-3. **Image Pull**: Downloads the container image using podman (unless --skip-pull is used)
-4. **Confirmation**: Prompts user to confirm data destruction
+3. **Image Pull**: Downloads the container image using podman (unless `--skip-pull` is used)
+4. **Confirmation**: Prompts user to confirm data destruction (unless `--force` is used)
 5. **Disk Wipe**: Removes existing partition tables and filesystem signatures
-6. **Partitioning**: Creates the 5-partition GPT layout described above
+6. **Partitioning**: Creates the 5-partition GPT layout
 7. **Formatting**: Formats all partitions (FAT32 for EFI, ext4 for others)
-8. **Extraction**: Extracts container filesystem to Root Partition 1 (active)
-9. **Configuration**: Creates `/etc/fstab`, sets up system directories, writes `/etc/phukit/config.json`
-10. **Bootloader Installation**: Installs and configures GRUB2 or systemd-boot
+8. **Mounting**: Mounts partitions in correct order for extraction
+9. **Extraction**: Extracts container filesystem to Root Partition 1
+10. **System Setup**: Creates `/var` structure, saves pristine `/etc`
+11. **Configuration**: Creates `/etc/fstab`, `/etc/phukit/config.json`
+12. **Bootloader Installation**: Installs and configures GRUB2 with UUIDs
 
 ### Update Process
 
 Updates use the inactive root partition for safe atomic updates:
 
-1. **Active Detection**: Determines which root partition is currently booted (via `/proc/cmdline`)
+1. **Active Detection**: Determines which root partition is currently booted
 2. **Target Selection**: Selects the inactive partition as update target
-3. **Image Pull**: Downloads the new container image (unless --skip-pull is used)
-4. **Extraction**: Extracts new filesystem to inactive root partition
-5. **Bootloader Update**: Updates GRUB configuration to boot from new partition by default
-6. **Menu Creation**: Generates dual boot menu with both "Updated" and "Previous" options
-7. **Config Update**: Updates `/etc/phukit/config.json` with new image reference
+3. **Image Pull**: Downloads the new container image (unless `--skip-pull` is used)
+4. **Mounting**: Mounts target partition and boot partition
+5. **Clearing**: Removes old content from target partition
+6. **Extraction**: Extracts new filesystem to target partition
+7. **/etc Merge**: Performs 3-way merge to preserve user configuration
+8. **System Directories**: Sets up necessary system directories
+9. **Bootloader Update**: Updates GRUB to boot from new partition by default
+10. **Dual Boot Menu**: Creates menu entries for both updated and previous systems
 
-After reboot, the system boots from the new partition. The old partition remains available for rollback.
+After reboot, the system boots from the new partition. The old partition remains available for rollback via the GRUB menu.
+
+### /etc Configuration Persistence
+
+`phukit` implements a 3-way merge for `/etc` configuration during updates:
+
+1. **Pristine**: Original `/etc` from initial installation (stored in `/var/lib/phukit/etc.pristine`)
+2. **Active**: Current `/etc` with user modifications
+3. **New**: Fresh `/etc` from new container image
+
+The merge algorithm:
+
+- Files modified by user in active system → **preserved** in new system
+- Files unchanged from pristine → **updated** from new container
+- New files in container → **added** to new system
+- Files deleted by user → **remain deleted** in new system
+
+This ensures user configuration survives updates while allowing package updates to deliver new defaults.
+
+## System Configuration
+
+After installation, `phukit` writes a configuration file to `/etc/phukit/config.json`:
+
+```json
+{
+  "image_ref": "quay.io/example/bootc-image:latest",
+  "device": "/dev/sda",
+  "install_date": "2025-12-16T10:30:00Z",
+  "kernel_args": ["console=ttyS0", "quiet"],
+  "bootloader_type": "grub2",
+  "active_partition": "/dev/sda3"
+}
+```
+
+This configuration is automatically used during updates, so you don't need to specify the image reference again.
+
+## Configuration File
+
+Create `~/.phukit.yaml` for user defaults:
+
+```yaml
+# Enable verbose logging
+verbose: false
+
 # Enable dry-run mode by default
 dry-run: false
-# Default image to use
-# default-image: "quay.io/example/bootc-image:latest"
-
 # Default kernel arguments
 # kernel-args:
 #   - console=ttyS0
@@ -233,71 +379,18 @@ dry-run: false
 
 See [.phukit.yaml.example](.phukit.yaml.example) for a complete example.
 
-## How It Works for the active partition
+## Safety Features
 
-- Custom kernel arguments (if specified)
-- Generated initramfs references
-- Dual boot menu entries (after updates) for both active and previous systems
-
-## System Configuration
-
-After installation, `phukit` writes a configuration file to `/etc/phukit/config.json` that stores:
-
-- Container image reference used for installation
-- Device path
-- Installation timestamp
-- Custom kernel arguments
-- Bootloader type
-
-This configuration is automatically read during updates, so you don't need to specify the image reference again - `phukit` will simply pull the latest tag of the originally installed image.
-
-```json
-{
-  "image_ref": "quay.io/example/bootc-image:latest",
-  "device": "/dev/sda",
-  "install_date": "2025-12-16T10:30:00Z",
-  "kernel_args": ["console=ttyS0", "quiet"],
-  "bootloader_type": "grub2"
-}
-```
+- **Unmounted Check**: Refuses to install if any partition is mounted
+- **Size Validation**: Ensures disk has minimum 50GB space
+- **Confirmation Prompt**: Requires typing "yes" before wiping disk (unless `--force`)
+- **Dry Run Mode**: Test operations without making changes
+- **Verbose Logging**: Track exactly what's happening
+- **A/B Rollback**: Previous system always available in boot menu
 
 ## Troubleshooting
 
-### "red tools (podman, sgdisk, mkfs, grub) are available 2. **Disk Validation**: Ensures the target disk meets requirements (size, not mounted) 3. **Image Pull**: Downloads the container image using podman (unless --skip-pull is used) 4. **Confirmation**: Prompts user to confirm data destruction 5. **Disk Wipe**: Removes existing partition tables and filesystem signatures 6. **Partitioning**: Creates GPT partition table with EFI, boot, and root partitions 7. **Formatting**: Formats partitions (FAT32 for EFI, ext4 for boot and root) 8. **Extraction**: Extracts container filesystem to mounted partitions 9. **Configuration**: Creates /etc/fstab and sets up system directories
-
-10.Installation Details
-
-`phukit` performs a native installation without requiring the `bootc` command:
-
-### Partitioning
-
-Creates a GPT partition table with:
-
-- **EFI System Partition** (512MB, FAT32): For UEFI boot files
-- **Boot Partition** (1GB, ext4): For kernel and initramfs
-- **Root Partition** (remaining space, ext4): For the system filesystem
-
-### Container Extraction
-
-Uses podman to:
-
-1. Create a temporary container from the image
-2. Export the container filesystem
-3. Extract it directly to the mounted root partition
-
-### Bootloader Configuration
-
-Automatically detects and installs the appropriate bootloader:
-
-- **GRUB2**: Default bootloader, widely compatible
-- **systemd-boot**: Used if detected in the container
-
-The bootloader is configured with:
-
-- Correct root filesystem UUID
-- Custom kernel arguments (if specified)
-- Generated initramfs references
-- Devgrub-install or grub2-install not found"
+### "grub-install or grub2-install not found"
 
 Install GRUB2:
 
@@ -320,28 +413,6 @@ sudo dnf install gdisk
 # Ubuntu/Debian
 sudo apt install gdisk
 ```
-
-This ensures the bootc installer has all necessary permissions to configure the target disk.
-
-## Safety Features
-
-- **Unmounted Check**: Refuses to install if any partition is mounted
-- \*Documentation
-
-- [A/B Updates](docs/AB-UPDATES.md) - Detailed documentation on the A/B update system
-- [Implementation Details](IMPLEMENTATION.md) - Technical implementation details
-
-## \*Size Validation\*\*: Ensures disk has minimum 10GB space
-
-- **Confirmation Prompt**: Requires typing "yes" before wiping disk
-- **Dry Run Mode**: Test operations without making changes
-- **Verbose Logging**: Track exactly what's happening
-
-## Troubleshooting
-
-### "bootc is not available"
-
-Install bootc from https://containers.github.io/bootc/
 
 ### "podman is not available"
 
@@ -366,6 +437,7 @@ Unmount all partitions before installation:
 ```bash
 sudo umount /dev/sda1
 sudo umount /dev/sda2
+# etc...
 ```
 
 ### Permission Denied
@@ -376,13 +448,39 @@ Run phukit with sudo:
 sudo phukit install --image IMAGE --device DEVICE
 ```
 
+## Documentation
+
+- [A/B Updates](docs/AB-UPDATES.md) - Detailed documentation on the A/B update system
+- [Implementation Details](IMPLEMENTATION.md) - Technical implementation details
+
+## Testing
+
+```bash
+# Run unit tests (no root required)
+make test-unit
+
+# Run integration tests (requires root)
+sudo make test-integration
+sudo make test-install
+sudo make test-update
+
+# Run linter
+make lint
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
 
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
@@ -399,4 +497,6 @@ MIT License - see LICENSE file for details
 
 ## Warning
 
-⚠️ **This tool will DESTROY ALL DATA on the target disk.** Always double-check the device path and ensure you have backups of any important data.
+⚠️ **THIS TOOL WILL DESTROY ALL DATA ON THE TARGET DISK** ⚠️
+
+Always double-check the device path before running install commands. Use `--dry-run` to test without making changes.

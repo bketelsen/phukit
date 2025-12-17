@@ -52,9 +52,85 @@ func (b *BootloaderInstaller) SetVerbose(verbose bool) {
 	b.Verbose = verbose
 }
 
+// copyKernelFromModules copies kernel and initramfs from /usr/lib/modules/$KERNEL_VERSION/ to /boot
+func (b *BootloaderInstaller) copyKernelFromModules() error {
+	modulesDir := filepath.Join(b.TargetDir, "usr", "lib", "modules")
+	bootDir := filepath.Join(b.TargetDir, "boot")
+
+	// Find kernel version directories
+	entries, err := os.ReadDir(modulesDir)
+	if err != nil || len(entries) == 0 {
+		return fmt.Errorf("no kernel modules found in /usr/lib/modules")
+	}
+
+	// Process each kernel version directory
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		kernelVersion := entry.Name()
+		kernelModuleDir := filepath.Join(modulesDir, kernelVersion)
+
+		// Look for kernel in /usr/lib/modules/$KERNEL_VERSION/
+		kernelPatterns := []string{
+			filepath.Join(kernelModuleDir, "vmlinuz"),
+			filepath.Join(kernelModuleDir, "vmlinuz-"+kernelVersion),
+		}
+
+		var srcKernel string
+		for _, pattern := range kernelPatterns {
+			if _, err := os.Stat(pattern); err == nil {
+				srcKernel = pattern
+				break
+			}
+		}
+
+		if srcKernel == "" {
+			continue // No kernel found for this version
+		}
+
+		// Copy kernel to /boot
+		kernelName := "vmlinuz-" + kernelVersion
+		destKernel := filepath.Join(bootDir, kernelName)
+		if err := copyFile(srcKernel, destKernel); err != nil {
+			return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
+		}
+		fmt.Printf("  Copied kernel: %s\n", kernelName)
+
+		// Look for initramfs in /usr/lib/modules/$KERNEL_VERSION/
+		initrdPatterns := []string{
+			filepath.Join(kernelModuleDir, "initramfs.img"),
+			filepath.Join(kernelModuleDir, "initrd.img"),
+			filepath.Join(kernelModuleDir, "initramfs-"+kernelVersion+".img"),
+			filepath.Join(kernelModuleDir, "initrd.img-"+kernelVersion),
+		}
+
+		for _, pattern := range initrdPatterns {
+			if srcInitrd, err := os.Stat(pattern); err == nil && !srcInitrd.IsDir() {
+				initrdName := "initramfs-" + kernelVersion + ".img"
+				destInitrd := filepath.Join(bootDir, initrdName)
+
+				if err := copyFile(pattern, destInitrd); err != nil {
+					return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
+				}
+				fmt.Printf("  Copied initramfs: %s\n", initrdName)
+				break // Only copy the first matching initramfs
+			}
+		}
+	}
+
+	return nil
+}
+
 // Install installs the bootloader
 func (b *BootloaderInstaller) Install() error {
 	fmt.Printf("Installing %s bootloader...\n", b.Type)
+
+	// Copy kernel and initramfs from /usr/lib/modules to /boot
+	if err := b.copyKernelFromModules(); err != nil {
+		return fmt.Errorf("failed to copy kernel from modules: %w", err)
+	}
 
 	switch b.Type {
 	case BootloaderGRUB2:

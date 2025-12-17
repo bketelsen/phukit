@@ -231,7 +231,7 @@ func (u *SystemUpdater) Update() error {
 	fmt.Println("\nStarting system update...")
 
 	// Step 1: Mount target partition
-	fmt.Println("\nStep 1/5: Mounting target partition...")
+	fmt.Println("\nStep 1/7: Mounting target partition...")
 	if err := os.MkdirAll(u.Config.MountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create mount point: %w", err)
 	}
@@ -247,7 +247,7 @@ func (u *SystemUpdater) Update() error {
 	}()
 
 	// Step 2: Clear existing content
-	fmt.Println("\nStep 2/5: Clearing old content from target partition...")
+	fmt.Println("\nStep 2/7: Clearing old content from target partition...")
 	entries, err := os.ReadDir(u.Config.MountPoint)
 	if err != nil {
 		return fmt.Errorf("failed to read target directory: %w", err)
@@ -260,7 +260,7 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 3: Extract new container filesystem
-	fmt.Println("\nStep 3/6: Extracting new container filesystem...")
+	fmt.Println("\nStep 3/7: Extracting new container filesystem...")
 	extractor := NewContainerExtractor(u.Config.ImageRef, u.Config.MountPoint)
 	extractor.SetVerbose(u.Config.Verbose)
 	if err := extractor.Extract(); err != nil {
@@ -268,7 +268,7 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 4: Merge /etc configuration from active system
-	fmt.Println("\nStep 4/6: Preserving user configuration...")
+	fmt.Println("\nStep 4/7: Preserving user configuration...")
 	activeRoot := u.Scheme.Root1Partition
 	if !u.Active {
 		activeRoot = u.Scheme.Root2Partition
@@ -278,13 +278,19 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 5: Setup system directories
-	fmt.Println("\nStep 5/6: Setting up system directories...")
+	fmt.Println("\nStep 5/7: Setting up system directories...")
 	if err := SetupSystemDirectories(u.Config.MountPoint); err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	// Step 6: Update bootloader configuration
-	fmt.Println("\nStep 6/6: Updating bootloader configuration...")
+	// Step 6: Install new kernel and initramfs if present
+	fmt.Println("\nStep 6/7: Checking for new kernel and initramfs...")
+	if err := u.InstallKernelAndInitramfs(); err != nil {
+		return fmt.Errorf("failed to install kernel/initramfs: %w", err)
+	}
+
+	// Step 7: Update bootloader configuration
+	fmt.Println("\nStep 7/7: Updating bootloader configuration...")
 	if err := u.UpdateBootloader(); err != nil {
 		return fmt.Errorf("failed to update bootloader: %w", err)
 	}
@@ -294,6 +300,138 @@ func (u *SystemUpdater) Update() error {
 	fmt.Printf("Next boot will use: %s\n", u.Target)
 	fmt.Println("Reboot to activate the new system")
 	fmt.Println(strings.Repeat("=", 60))
+
+	return nil
+}
+
+// InstallKernelAndInitramfs checks for new kernel and initramfs in the updated root
+// and copies them to the /boot partition if found
+func (u *SystemUpdater) InstallKernelAndInitramfs() error {
+	// Look for kernel modules in the new root's /usr/lib/modules directory
+	modulesDir := filepath.Join(u.Config.MountPoint, "usr", "lib", "modules")
+
+	// Find kernel version directories
+	entries, err := os.ReadDir(modulesDir)
+	if err != nil || len(entries) == 0 {
+		fmt.Println("  No kernel modules found in updated image")
+		return nil
+	}
+
+	// Mount boot partition
+	bootMountPoint := filepath.Join(os.TempDir(), "phukit-boot-mount")
+	if err := os.MkdirAll(bootMountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to create boot mount point: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(bootMountPoint) }()
+
+	cmd := exec.Command("mount", u.Scheme.BootPartition, bootMountPoint)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to mount boot partition: %w\nOutput: %s", err, string(output))
+	}
+	defer func() { _ = exec.Command("umount", bootMountPoint).Run() }()
+
+	// Get existing kernels in /boot partition for comparison
+	existingKernels, _ := filepath.Glob(filepath.Join(bootMountPoint, "vmlinuz-*"))
+	existingKernelMap := make(map[string]bool)
+	for _, k := range existingKernels {
+		existingKernelMap[filepath.Base(k)] = true
+	}
+
+	copiedKernel := false
+	copiedInitramfs := false
+
+	// Process each kernel version directory
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		kernelVersion := entry.Name()
+		kernelModuleDir := filepath.Join(modulesDir, kernelVersion)
+
+		// Look for kernel in /usr/lib/modules/$KERNEL_VERSION/
+		kernelPatterns := []string{
+			filepath.Join(kernelModuleDir, "vmlinuz"),
+			filepath.Join(kernelModuleDir, "vmlinuz-"+kernelVersion),
+		}
+
+		var srcKernel string
+		for _, pattern := range kernelPatterns {
+			if _, err := os.Stat(pattern); err == nil {
+				srcKernel = pattern
+				break
+			}
+		}
+
+		if srcKernel == "" {
+			continue // No kernel found for this version
+		}
+
+		// Destination kernel name
+		kernelName := "vmlinuz-" + kernelVersion
+		destKernel := filepath.Join(bootMountPoint, kernelName)
+
+		// Check if kernel needs to be copied
+		needsCopy := false
+		if !existingKernelMap[kernelName] {
+			needsCopy = true
+			fmt.Printf("  Found new kernel: %s\n", kernelName)
+		} else {
+			// Compare file sizes to detect changes
+			srcInfo, _ := os.Stat(srcKernel)
+			dstInfo, _ := os.Stat(destKernel)
+			if srcInfo.Size() != dstInfo.Size() {
+				needsCopy = true
+				fmt.Printf("  Kernel %s has changed, updating\n", kernelName)
+			}
+		}
+
+		if needsCopy {
+			if err := copyFile(srcKernel, destKernel); err != nil {
+				return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
+			}
+			fmt.Printf("  Installed kernel: %s\n", kernelName)
+			copiedKernel = true
+		}
+
+		// Look for initramfs in /usr/lib/modules/$KERNEL_VERSION/
+		initrdPatterns := []string{
+			filepath.Join(kernelModuleDir, "initramfs.img"),
+			filepath.Join(kernelModuleDir, "initrd.img"),
+			filepath.Join(kernelModuleDir, "initramfs-"+kernelVersion+".img"),
+			filepath.Join(kernelModuleDir, "initrd.img-"+kernelVersion),
+		}
+
+		for _, pattern := range initrdPatterns {
+			if srcInitrd, err := os.Stat(pattern); err == nil && !srcInitrd.IsDir() {
+				initrdName := "initramfs-" + kernelVersion + ".img"
+				destInitrd := filepath.Join(bootMountPoint, initrdName)
+
+				// Check if initramfs needs to be copied
+				needsCopy := false
+				if dstInitrd, err := os.Stat(destInitrd); os.IsNotExist(err) {
+					needsCopy = true
+					fmt.Printf("  Found new initramfs: %s\n", initrdName)
+				} else if err == nil && srcInitrd.Size() != dstInitrd.Size() {
+					needsCopy = true
+					fmt.Printf("  Initramfs %s has changed, updating\n", initrdName)
+				}
+
+				if needsCopy {
+					if err := copyFile(pattern, destInitrd); err != nil {
+						return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
+					}
+					fmt.Printf("  Installed initramfs: %s\n", initrdName)
+					copiedInitramfs = true
+				}
+				break // Only copy the first matching initramfs
+			}
+		}
+	}
+
+	if !copiedKernel && !copiedInitramfs {
+		fmt.Println("  Kernel and initramfs are up to date")
+	}
 
 	return nil
 }

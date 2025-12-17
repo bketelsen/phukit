@@ -88,4 +88,15 @@ deps: ## Download dependencies
 	@go mod download
 	@go mod tidy
 
+bump: ## generate a new version with svu
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Working directory is not clean. Please commit or stash changes before bumping version."; \
+		exit 1; \
+	fi
+	@echo "Creating new tag..."
+	@version=$$(svu next); \
+		git tag -a $$version -m "Version $$version"; \
+		echo "Tagged version $$version" \
+		git push origin --tags
+
 .DEFAULT_GOAL := help

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -25,7 +27,15 @@ func SetVersion(version string) {
 
 // Execute runs the root command
 func Execute() error {
-	return rootCmd.Execute()
+	if err := fang.Execute(
+		context.Background(),
+		rootCmd,
+		fang.WithVersion(rootCmd.Version),
+		fang.WithNotifySignal(os.Interrupt, os.Kill),
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 func init() {

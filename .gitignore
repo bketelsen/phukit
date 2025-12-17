@@ -34,3 +34,7 @@ config.yaml
 
 # Logs
 *.log
+
+
+# direnv
+.envrc

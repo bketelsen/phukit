@@ -41,7 +41,7 @@ jobs:
           sha256sum phukit-linux-* > checksums.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             phukit-linux-amd64

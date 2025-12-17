@@ -148,10 +148,15 @@ func extractTar(r io.Reader, targetDir string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", target, err)
 			}
-			// Set ownership and mode for directory
-			_ = os.Lchown(target, header.Uid, header.Gid)
-			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to set mode on directory %s: %w", target, err)
+
+			// Set ownership first
+			_ = os.Chown(target, header.Uid, header.Gid)
+
+			// Set mode including special bits (SUID/SGID/sticky)
+			mode := os.FileMode(header.Mode & 07777)
+
+			if err := os.Chmod(target, mode); err != nil {
+				return fmt.Errorf("failed to set mode %04o on directory %s: %w", mode, target, err)
 			}
 
 		case tar.TypeReg:
@@ -172,12 +177,19 @@ func extractTar(r io.Reader, targetDir string) error {
 			}
 			f.Close()
 
-			// Set ownership first (this may clear SUID/SGID bits)
-			_ = os.Lchown(target, header.Uid, header.Gid)
+			// Set ownership first (this will clear SUID/SGID on Linux for security)
+			if err := os.Chown(target, header.Uid, header.Gid); err != nil {
+				// Ownership change may fail if not root or UIDs don't exist
+				// Continue anyway to at least set permissions
+			}
 
-			// Then set the full mode including SUID/SGID/sticky bits
-			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to set mode on file %s: %w", target, err)
+			// Set the mode AFTER ownership to restore SUID/SGID/sticky bits
+			// The tar header.Mode contains permission bits in the low 12 bits:
+			// 04000 = SUID, 02000 = SGID, 01000 = sticky, 0777 = rwxrwxrwx
+			mode := os.FileMode(header.Mode & 07777)
+
+			if err := os.Chmod(target, mode); err != nil {
+				return fmt.Errorf("failed to set mode %04o on file %s: %w", mode, target, err)
 			}
 
 		case tar.TypeSymlink:
@@ -214,12 +226,15 @@ func extractTar(r io.Reader, targetDir string) error {
 				if err := copyFile(linkTarget, target); err != nil {
 					return fmt.Errorf("failed to create hard link or copy %s: %w", target, err)
 				}
+				// For copied files, set ownership and mode
+				_ = os.Chown(target, header.Uid, header.Gid)
+
+				mode := os.FileMode(header.Mode & 07777)
+				if err := os.Chmod(target, mode); err != nil {
+					return fmt.Errorf("failed to set mode %04o on copied hard link %s: %w", mode, target, err)
+				}
 			}
-			// Set ownership and mode for hard link
-			_ = os.Lchown(target, header.Uid, header.Gid)
-			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to set mode on hard link %s: %w", target, err)
-			}
+			// Note: For actual hard links, ownership/mode are shared with the target
 		}
 	}
 

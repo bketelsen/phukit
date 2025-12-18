@@ -11,8 +11,9 @@ Successfully refactored `phukit` to perform bootc-compatible container installat
 1. **[pkg/partition.go](pkg/partition.go)** - Disk partitioning and formatting
 
    - GPT partition table creation with `sgdisk`
-   - EFI (2GB FAT32), Boot (1GB ext4), Root1 (12GB ext4), Root2 (12GB ext4), Var (remaining ext4)
+   - EFI (2GB FAT32), Boot/XBOOTLDR (1GB ext4), Root1 (12GB ext4), Root2 (12GB ext4), Var (remaining ext4)
    - A/B partition scheme for atomic updates
+   - UAPI-compliant partition mounting (ESP at /efi, XBOOTLDR at /boot)
    - Partition mounting and UUID management
 
 2. **[pkg/container.go](pkg/container.go)** - Container filesystem extraction
@@ -26,7 +27,8 @@ Successfully refactored `phukit` to perform bootc-compatible container installat
 3. **[pkg/bootloader.go](pkg/bootloader.go)** - Bootloader installation
 
    - GRUB2 and systemd-boot support (with automatic detection)
-   - Copies kernels/initramfs from /usr/lib/modules to appropriate boot location
+   - UAPI-compliant: kernels/initramfs copied to /boot (XBOOTLDR partition)
+   - Boot loader entries written to /boot/loader/entries/ per UAPI spec
    - Configures kernel cmdline with root=UUID and systemd.mount-extra for /var
    - Generates bootloader configuration files
    - Kernel argument customization
@@ -49,8 +51,8 @@ The complete installation workflow (6 steps):
 ```
 1. Create Partitions
    └─ sgdisk creates GPT with EFI/boot/root1/root2/var partitions
-      ├─ EFI: 2GB (ESP partition type, auto-mounted by systemd)
-      ├─ Boot: 1GB (XBOOTLDR partition type, auto-mounted by systemd)
+      ├─ EFI: 2GB (ESP partition type c12a7328-f81f-11d2-ba4b-00a0c93ec93b)
+      ├─ Boot: 1GB (XBOOTLDR partition type bc13c2ff-59e6-4262-a352-b275fd6f7172)
       ├─ Root1: 12GB (active root for OS A)
       ├─ Root2: 12GB (inactive root for OS B, for A/B updates)
       └─ Var: remaining space (mounted via systemd.mount-extra)
@@ -60,10 +62,10 @@ The complete installation workflow (6 steps):
    ├─ mkfs.ext4 for boot, root1, root2, var
    └─ Retrieve UUIDs with blkid
 
-3. Mount Partitions
+3. Mount Partitions (per UAPI Boot Loader Specification)
    ├─ Mount root1 → /tmp/phukit-install
-   ├─ Mount boot → /tmp/phukit-install/boot
-   ├─ Mount EFI → /tmp/phukit-install/boot/efi
+   ├─ Mount XBOOTLDR → /tmp/phukit-install/boot
+   ├─ Mount ESP → /tmp/phukit-install/efi (NOT nested under /boot)
    └─ Mount var → /tmp/phukit-install/var
 
 4. Extract Container
@@ -86,6 +88,48 @@ The complete installation workflow (6 steps):
    │  └─ systemd.mount-extra=UUID=<var-uuid>:/var:ext4:defaults
    └─ Set proper kernel cmdline arguments
 ```
+
+## UAPI Boot Loader Specification Compliance
+
+`phukit` follows the [UAPI Group Boot Loader Specification](https://uapi-group.org/specifications/specs/boot_loader_specification/) for maximum compatibility with modern Linux boot infrastructure.
+
+### Partition Layout
+
+- **ESP (EFI System Partition)**: Mounted at `/efi` (not `/boot/efi`)
+
+  - Contains systemd-boot bootloader binaries
+  - Partition type: `c12a7328-f81f-11d2-ba4b-00a0c93ec93b` (EF00)
+
+- **XBOOTLDR (Extended Boot Loader Partition)**: Mounted at `/boot`
+  - Contains kernel images, initramfs, and boot loader entries
+  - Partition type: `bc13c2ff-59e6-4262-a352-b275fd6f7172`
+  - Primary location for boot menu entries and kernel files
+
+### Boot Loader Entry Location
+
+Per the UAPI specification:
+
+- Boot loader entries are stored in `/boot/loader/entries/` (on XBOOTLDR)
+- Kernel and initramfs files are stored in `/boot/` (on XBOOTLDR)
+- For systemd-boot, the bootloader itself runs from ESP (`/efi`), but reads entries from XBOOTLDR (`/boot`)
+- For GRUB2, all files including configuration are on XBOOTLDR (`/boot`)
+
+### Benefits of UAPI Compliance
+
+1. **Avoids nested mount complexity**: ESP and XBOOTLDR are mounted separately, avoiding autofs nesting issues
+2. **Data integrity**: VFAT partitions remain unmounted when not needed, protecting against corruption
+3. **Standard compatibility**: Works seamlessly with systemd-gpt-auto-generator and other UAPI-compliant tools
+4. **Clear separation**: Bootloader binaries (ESP) vs. boot entries and kernels (XBOOTLDR)
+
+### Mount Point Specification
+
+The specification recommends:
+
+- If both XBOOTLDR and ESP exist, mount XBOOTLDR to `/boot` and ESP to `/efi`
+- Boot entries should be written to `/boot/loader/entries/`
+- This is the configuration `phukit` implements
+
+**Note**: The traditional nested mount (`/boot/efi`) is explicitly **not recommended** by the UAPI specification as it complicates autofs implementations and boot management.
 
 ## Key Features
 
@@ -167,6 +211,7 @@ sudo ./phukit install \
 - ✅ System configuration (fstab, directories)
 - ✅ Systemd Discoverable Partitions support
 - ✅ Kernel cmdline generation with systemd.mount-extra
+- ✅ **UAPI Boot Loader Specification compliance** (separate ESP and XBOOTLDR mounts)
 
 ### Code Organization
 

@@ -8,7 +8,7 @@ A Go application for installing bootc-compatible containers to physical disks wi
 
 `phukit` is a command-line tool that installs bootc-compatible container images directly to physical disks. It handles the complete installation process including partitioning, filesystem creation, container extraction, and bootloader installation - all without requiring the `bootc` command itself.
 
-The tool implements an A/B partition scheme for safe, atomic system updates with automatic rollback capability.
+The tool implements an A/B partition scheme for safe, atomic system updates with automatic rollback capability. It follows the [UAPI Group Boot Loader Specification](https://uapi-group.org/specifications/specs/boot_loader_specification/) for maximum compatibility with modern Linux boot infrastructure.
 
 ## Source Image Requirements
 
@@ -98,7 +98,8 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 - ✅ **Validation**: Verify disks are suitable for installation
 - 🚀 **Automated Installation**: Complete installation workflow with safety checks
 - 🔄 **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
-- 🔧 **Kernel Arguments**: Support for custom kernel arguments
+- � **UAPI Compliance**: Follows Boot Loader Specification for standard-compliant boot management
+- �🔧 **Kernel Arguments**: Support for custom kernel arguments
 - 💾 **/etc Persistence**: Three-way merge preserves user configuration across updates
 - 🏷️ **Multiple Device Types**: Supports SATA (sd\*), NVMe (nvme\*), virtio (vd\*), and MMC devices
 - 🛡️ **Safety Features**: Confirmation prompts and force flag for automation

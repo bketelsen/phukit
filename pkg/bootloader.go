@@ -60,15 +60,10 @@ func (b *BootloaderInstaller) SetVerbose(verbose bool) {
 func (b *BootloaderInstaller) copyKernelFromModules() error {
 	modulesDir := filepath.Join(b.TargetDir, "usr", "lib", "modules")
 
-	// Determine destination directory based on bootloader type
-	var bootDir string
-	if b.Type == BootloaderSystemdBoot {
-		// systemd-boot needs files on the EFI System Partition
-		bootDir = filepath.Join(b.TargetDir, "boot", "efi")
-	} else {
-		// GRUB uses the boot partition
-		bootDir = filepath.Join(b.TargetDir, "boot")
-	}
+	// Per UAPI Boot Loader Specification:
+	// Kernels and initramfs go to /boot (XBOOTLDR partition) for both bootloaders
+	// systemd-boot itself runs from ESP (/efi), but boot entries are on XBOOTLDR (/boot)
+	bootDir := filepath.Join(b.TargetDir, "boot")
 
 	// Find kernel version directories
 	entries, err := os.ReadDir(modulesDir)
@@ -103,17 +98,13 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 			continue // No kernel found for this version
 		}
 
-		// Copy kernel to appropriate boot directory
+		// Copy kernel to /boot partition
 		kernelName := "vmlinuz-" + kernelVersion
 		destKernel := filepath.Join(bootDir, kernelName)
 		if err := copyFile(srcKernel, destKernel); err != nil {
 			return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
 		}
-		if b.Type == BootloaderSystemdBoot {
-			fmt.Printf("  Copied kernel to EFI partition: %s\n", kernelName)
-		} else {
-			fmt.Printf("  Copied kernel to boot partition: %s\n", kernelName)
-		}
+		fmt.Printf("  Copied kernel to /boot: %s\n", kernelName)
 
 		// Look for initramfs in /usr/lib/modules/$KERNEL_VERSION/
 		initrdPatterns := []string{
@@ -131,11 +122,7 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 				if err := copyFile(pattern, destInitrd); err != nil {
 					return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
 				}
-				if b.Type == BootloaderSystemdBoot {
-					fmt.Printf("  Copied initramfs to EFI partition: %s\n", initrdName)
-				} else {
-					fmt.Printf("  Copied initramfs to boot partition: %s\n", initrdName)
-				}
+				fmt.Printf("  Copied initramfs to /boot: %s\n", initrdName)
 				break // Only copy the first matching initramfs
 			}
 		}
@@ -174,9 +161,10 @@ func (b *BootloaderInstaller) installGRUB2() error {
 	}
 
 	// Install GRUB to the disk
+	// Per UAPI spec: ESP is at /efi, XBOOTLDR is at /boot
 	args := []string{
 		"--target=x86_64-efi",
-		"--efi-directory=" + filepath.Join(b.TargetDir, "boot", "efi"),
+		"--efi-directory=" + filepath.Join(b.TargetDir, "efi"),
 		"--boot-directory=" + filepath.Join(b.TargetDir, "boot"),
 		"--bootloader-id=BOOT",
 		"--removable", // Install to removable media path for compatibility
@@ -324,21 +312,21 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		return fmt.Errorf("failed to get var UUID: %w", err)
 	}
 
-	// Find kernel on EFI partition (where systemd-boot expects them)
-	efiDir := filepath.Join(b.TargetDir, "boot", "efi")
-	kernels, err := filepath.Glob(filepath.Join(efiDir, "vmlinuz-*"))
+	// Per UAPI spec: kernels are on XBOOTLDR partition (/boot), not ESP
+	bootDir := filepath.Join(b.TargetDir, "boot")
+	kernels, err := filepath.Glob(filepath.Join(bootDir, "vmlinuz-*"))
 	if err != nil || len(kernels) == 0 {
-		return fmt.Errorf("no kernel found in /boot/efi")
+		return fmt.Errorf("no kernel found in /boot")
 	}
 	kernel := filepath.Base(kernels[0])
 	kernelVersion := strings.TrimPrefix(kernel, "vmlinuz-")
 
-	// Look for initramfs on EFI partition
+	// Look for initramfs on /boot partition
 	var initrd string
 	initrdPatterns := []string{
-		filepath.Join(efiDir, "initramfs-"+kernelVersion+".img"),
-		filepath.Join(efiDir, "initrd.img-"+kernelVersion),
-		filepath.Join(efiDir, "initramfs-"+kernelVersion),
+		filepath.Join(bootDir, "initramfs-"+kernelVersion+".img"),
+		filepath.Join(bootDir, "initrd.img-"+kernelVersion),
+		filepath.Join(bootDir, "initramfs-"+kernelVersion),
 	}
 	for _, pattern := range initrdPatterns {
 		if _, err := os.Stat(pattern); err == nil {
@@ -356,8 +344,9 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
-	// Create loader configuration
-	loaderDir := filepath.Join(b.TargetDir, "boot", "efi", "loader")
+	// Per UAPI Boot Loader Specification:
+	// Bootloader entries go to /boot/loader/entries (on XBOOTLDR partition)
+	loaderDir := filepath.Join(b.TargetDir, "boot", "loader")
 	if err := os.MkdirAll(loaderDir, 0755); err != nil {
 		return fmt.Errorf("failed to create loader directory: %w", err)
 	}
@@ -372,7 +361,7 @@ editor yes
 		return fmt.Errorf("failed to write loader.conf: %w", err)
 	}
 
-	// Create boot entry
+	// Create boot entry directory
 	entriesDir := filepath.Join(loaderDir, "entries")
 	if err := os.MkdirAll(entriesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create entries directory: %w", err)

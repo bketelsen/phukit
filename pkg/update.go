@@ -313,9 +313,7 @@ func (u *SystemUpdater) Update() error {
 }
 
 // InstallKernelAndInitramfs checks for new kernel and initramfs in the updated root
-// and copies them to the appropriate partition based on bootloader type
-// GRUB: copies to /boot partition
-// systemd-boot: copies to /boot/efi (EFI partition)
+// and copies them to /boot partition per UAPI Boot Loader Specification
 func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	// Look for kernel modules in the new root's /usr/lib/modules directory
 	modulesDir := filepath.Join(u.Config.MountPoint, "usr", "lib", "modules")
@@ -327,7 +325,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 		return nil
 	}
 
-	// Mount boot partition
+	// Per UAPI spec: mount XBOOTLDR at /boot and ESP separately
 	bootMountPoint := filepath.Join(os.TempDir(), "phukit-boot-mount")
 	if err := os.MkdirAll(bootMountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create boot mount point: %w", err)
@@ -340,11 +338,12 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	}
 	defer func() { _ = exec.Command("umount", bootMountPoint).Run() }()
 
-	// Mount EFI partition (nested)
-	efiMountPoint := filepath.Join(bootMountPoint, "efi")
+	// Mount EFI partition separately (not nested under /boot)
+	efiMountPoint := filepath.Join(os.TempDir(), "phukit-efi-mount")
 	if err := os.MkdirAll(efiMountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create EFI mount point: %w", err)
 	}
+	defer func() { _ = os.RemoveAll(efiMountPoint) }()
 
 	cmd = exec.Command("mount", u.Scheme.EFIPartition, efiMountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -352,17 +351,12 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	}
 	defer func() { _ = exec.Command("umount", efiMountPoint).Run() }()
 
-	// Detect bootloader type to determine where to copy kernels
+	// Detect bootloader type
 	bootloaderType := u.detectBootloaderTypeFromMount(bootMountPoint, efiMountPoint)
 	fmt.Printf("  Detected bootloader: %s\n", bootloaderType)
 
-	// Determine target directory based on bootloader
-	var kernelDestDir string
-	if bootloaderType == BootloaderSystemdBoot {
-		kernelDestDir = efiMountPoint // systemd-boot needs files on EFI partition
-	} else {
-		kernelDestDir = bootMountPoint // GRUB uses boot partition
-	}
+	// Per UAPI spec: kernels always go to /boot (XBOOTLDR) for both bootloaders
+	kernelDestDir := bootMountPoint
 
 	// Get existing kernels for comparison
 	existingKernels, _ := filepath.Glob(filepath.Join(kernelDestDir, "vmlinuz-*"))
@@ -472,8 +466,8 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 
 // detectBootloaderTypeFromMount detects bootloader from already-mounted partitions
 func (u *SystemUpdater) detectBootloaderTypeFromMount(bootMount, efiMount string) BootloaderType {
-	// Check for systemd-boot on EFI partition
-	loaderDir := filepath.Join(efiMount, "loader")
+	// Per UAPI spec: systemd-boot entries are in /boot/loader
+	loaderDir := filepath.Join(bootMount, "loader")
 	if _, err := os.Stat(loaderDir); err == nil {
 		return BootloaderSystemdBoot
 	}
@@ -495,7 +489,7 @@ func (u *SystemUpdater) detectBootloaderTypeFromMount(bootMount, efiMount string
 
 // UpdateBootloader updates the bootloader to boot from the new partition
 func (u *SystemUpdater) UpdateBootloader() error {
-	// Mount boot partition
+	// Per UAPI spec: mount XBOOTLDR (/boot) and ESP (/efi) separately
 	if err := os.MkdirAll(u.Config.BootMountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create boot mount point: %w", err)
 	}
@@ -506,11 +500,12 @@ func (u *SystemUpdater) UpdateBootloader() error {
 	}
 	defer func() { _ = exec.Command("umount", u.Config.BootMountPoint).Run() }()
 
-	// Mount EFI partition (nested under boot mount point)
-	efiMountPoint := filepath.Join(u.Config.BootMountPoint, "efi")
+	// Mount EFI partition separately (not nested under /boot)
+	efiMountPoint := filepath.Join(os.TempDir(), "phukit-update-efi")
 	if err := os.MkdirAll(efiMountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create EFI mount point: %w", err)
 	}
+	defer func() { _ = os.RemoveAll(efiMountPoint) }()
 
 	cmd = exec.Command("mount", u.Scheme.EFIPartition, efiMountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -535,8 +530,8 @@ func (u *SystemUpdater) UpdateBootloader() error {
 
 // detectBootloaderType detects which bootloader is installed
 func (u *SystemUpdater) detectBootloaderType() BootloaderType {
-	// Check for systemd-boot
-	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
+	// Per UAPI spec: systemd-boot entries are in /boot/loader
+	loaderDir := filepath.Join(u.Config.BootMountPoint, "loader")
 	if _, err := os.Stat(loaderDir); err == nil {
 		return BootloaderSystemdBoot
 	}
@@ -661,21 +656,20 @@ func (u *SystemUpdater) updateSystemdBootBootloader() error {
 	}
 	activeUUID, _ := GetPartitionUUID(activeRoot)
 
-	// Find kernel and initramfs on EFI partition (where systemd-boot expects them)
-	efiMountPoint := filepath.Join(u.Config.BootMountPoint, "efi")
-	kernels, err := filepath.Glob(filepath.Join(efiMountPoint, "vmlinuz-*"))
+	// Per UAPI spec: kernels are on /boot (XBOOTLDR partition)
+	kernels, err := filepath.Glob(filepath.Join(u.Config.BootMountPoint, "vmlinuz-*"))
 	if err != nil || len(kernels) == 0 {
-		return fmt.Errorf("no kernel found on EFI partition")
+		return fmt.Errorf("no kernel found in /boot")
 	}
 	kernel := filepath.Base(kernels[0])
 	kernelVersion := strings.TrimPrefix(kernel, "vmlinuz-")
 
-	// Look for initramfs on EFI partition
+	// Look for initramfs on /boot partition
 	var initrd string
 	initrdPatterns := []string{
-		filepath.Join(efiMountPoint, "initramfs-"+kernelVersion+".img"),
-		filepath.Join(efiMountPoint, "initrd.img-"+kernelVersion),
-		filepath.Join(efiMountPoint, "initramfs-"+kernelVersion),
+		filepath.Join(u.Config.BootMountPoint, "initramfs-"+kernelVersion+".img"),
+		filepath.Join(u.Config.BootMountPoint, "initrd.img-"+kernelVersion),
+		filepath.Join(u.Config.BootMountPoint, "initramfs-"+kernelVersion),
 	}
 	for _, pattern := range initrdPatterns {
 		if _, err := os.Stat(pattern); err == nil {
@@ -694,8 +688,8 @@ func (u *SystemUpdater) updateSystemdBootBootloader() error {
 	// Get OS name from the updated system
 	osName := ParseOSRelease(u.Config.MountPoint)
 
-	// Update loader.conf to default to bootc entry
-	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
+	// Per UAPI spec: loader entries are in /boot/loader (XBOOTLDR partition)
+	loaderDir := filepath.Join(u.Config.BootMountPoint, "loader")
 
 	// Create/update main boot entry (always points to newest system)
 	entriesDir := filepath.Join(loaderDir, "entries")

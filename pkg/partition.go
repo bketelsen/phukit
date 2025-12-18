@@ -189,29 +189,30 @@ func MountPartitions(scheme *PartitionScheme, mountPoint string, dryRun bool) er
 		return fmt.Errorf("failed to mount root1 partition: %w\nOutput: %s", err, string(output))
 	}
 
-	// Create boot and var subdirectories
+	// Create boot, efi, and var subdirectories
+	// Per UAPI Boot Loader Specification:
+	// - XBOOTLDR partition mounts to /boot
+	// - ESP mounts to /efi (NOT nested under /boot)
 	bootDir := filepath.Join(mountPoint, "boot")
+	efiDir := filepath.Join(mountPoint, "efi")
 	varDir := filepath.Join(mountPoint, "var")
 	if err := os.MkdirAll(bootDir, 0755); err != nil {
 		return fmt.Errorf("failed to create boot directory: %w", err)
+	}
+	if err := os.MkdirAll(efiDir, 0755); err != nil {
+		return fmt.Errorf("failed to create efi directory: %w", err)
 	}
 	if err := os.MkdirAll(varDir, 0755); err != nil {
 		return fmt.Errorf("failed to create var directory: %w", err)
 	}
 
-	// Mount boot partition
+	// Mount XBOOTLDR partition to /boot
 	cmd = exec.Command("mount", scheme.BootPartition, bootDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to mount boot partition: %w\nOutput: %s", err, string(output))
 	}
 
-	// Create EFI directory after mounting boot (so it's on the boot partition)
-	efiDir := filepath.Join(mountPoint, "boot", "efi")
-	if err := os.MkdirAll(efiDir, 0755); err != nil {
-		return fmt.Errorf("failed to create efi directory: %w", err)
-	}
-
-	// Mount EFI partition
+	// Mount ESP to /efi (not nested under /boot)
 	cmd = exec.Command("mount", scheme.EFIPartition, efiDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to mount EFI partition: %w\nOutput: %s", err, string(output))
@@ -237,11 +238,11 @@ func UnmountPartitions(mountPoint string, dryRun bool) error {
 	fmt.Println("Unmounting partitions...")
 
 	// Unmount in reverse order
-	efiDir := filepath.Join(mountPoint, "boot", "efi")
+	efiDir := filepath.Join(mountPoint, "efi")
 	bootDir := filepath.Join(mountPoint, "boot")
 	varDir := filepath.Join(mountPoint, "var")
 
-	// Unmount EFI
+	// Unmount EFI (separate from /boot per UAPI spec)
 	if err := exec.Command("umount", efiDir).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to unmount EFI: %v\n", err)
 	}

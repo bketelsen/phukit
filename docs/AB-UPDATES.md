@@ -8,13 +8,17 @@ The `phukit update` command implements an A/B (dual root) update system that ena
 
 ### Partition Layout
 
+Per UAPI Boot Loader Specification:
+
 ```
-/dev/sdX1 - EFI (2GB)          - Boot files
-/dev/sdX2 - Boot (1GB)         - Kernels and initramfs
+/dev/sdX1 - EFI (2GB)          - ESP: Bootloader binaries (mounted at /efi)
+/dev/sdX2 - Boot (1GB)         - XBOOTLDR: Kernels, initramfs, boot entries (mounted at /boot)
 /dev/sdX3 - Root1 (12GB)       - Primary root filesystem
 /dev/sdX4 - Root2 (12GB)       - Secondary root filesystem
 /dev/sdX5 - Var (remaining)    - Shared /var data
 ```
+
+**Note**: Following the UAPI specification, ESP is mounted at `/efi` (not `/boot/efi`) and XBOOTLDR is mounted at `/boot`. This avoids nested mount complications and follows modern boot management standards.
 
 ### Update Process
 
@@ -83,12 +87,23 @@ phukit update \
 
 ## Boot Menu Options
 
-After an update, the GRUB boot menu provides two options:
+After an update, the boot menu provides two options:
+
+**For systemd-boot** (in `/boot/loader/entries/` per UAPI spec):
 
 ```
-1. Linux (Updated)    - New system (default)
-2. Linux (Previous)   - Previous system (rollback)
+1. [OS Name]            - New system (default, bootc.conf)
+2. [OS Name] (Previous) - Previous system (rollback, bootc-previous.conf)
 ```
+
+**For GRUB2**:
+
+```
+1. [OS Name]            - New system (default)
+2. [OS Name] (Previous) - Previous system (rollback)
+```
+
+Boot entries use the OS name from `/etc/os-release` for consistent titles across initial install and updates.
 
 ## Rollback Procedure
 

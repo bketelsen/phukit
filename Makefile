@@ -89,6 +89,13 @@ deps: ## Download dependencies
 	@go mod tidy
 
 bump: ## generate a new version with svu
+	# build and test before bumping version
+	$(MAKE) build
+	$(MAKE) test
+	# format code
+	$(MAKE) fmt
+	# run linter to ensure code quality
+	$(MAKE) lint
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Working directory is not clean. Please commit or stash changes before bumping version."; \
 		exit 1; \

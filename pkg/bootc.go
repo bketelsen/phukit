@@ -70,18 +70,6 @@ func CheckRequiredTools() error {
 		"partprobe",
 	}
 
-	// Check for grub-install or grub2-install
-	hasGrub := false
-	for _, grubCmd := range []string{"grub-install", "grub2-install"} {
-		if _, err := exec.LookPath(grubCmd); err == nil {
-			hasGrub = true
-			break
-		}
-	}
-	if !hasGrub {
-		return fmt.Errorf("grub-install or grub2-install not found")
-	}
-
 	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err != nil {
 			return fmt.Errorf("%s not found: %w", tool, err)

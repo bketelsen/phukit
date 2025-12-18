@@ -248,7 +248,7 @@ func (b *BootloaderInstaller) generateGRUBConfig() error {
 		"ro",
 		"console=tty0",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=/var:UUID=" + varUUID + ":ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
@@ -352,7 +352,7 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		"root=UUID=" + rootUUID,
 		"rw",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=/var:UUID=" + varUUID + ":ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 

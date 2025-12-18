@@ -278,8 +278,20 @@ func (b *BootloaderInstaller) installSystemdBoot() error {
 		return fmt.Errorf("bootctl not found, systemd-boot requires systemd")
 	}
 
-	// Install systemd-boot
-	cmd := exec.Command("bootctl", "--root="+b.TargetDir, "install")
+	// Per UAPI Boot Loader Specification:
+	// - ESP is at /efi (not /boot/efi)
+	// - XBOOTLDR is at /boot
+	// When using --root, paths should be relative to the root
+	// So we specify /efi and /boot (which are already relative to TargetDir)
+
+	// Install systemd-boot with explicit ESP and boot paths
+	// --esp-path: where to install the bootloader (ESP) - relative to --root
+	// --boot-path: where boot entries and kernels are located (XBOOTLDR) - relative to --root
+	cmd := exec.Command("bootctl",
+		"--root="+b.TargetDir,
+		"--esp-path=/efi",
+		"--boot-path=/boot",
+		"install")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

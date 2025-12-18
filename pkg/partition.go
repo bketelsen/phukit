@@ -43,15 +43,20 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 	commands := [][]string{
 		// Create GPT partition table
 		{"sgdisk", "--clear", device},
-		// Create EFI partition (2GB, type EF00)
+		// Create EFI partition (2GB, type EF00 = c12a7328-f81f-11d2-ba4b-00a0c93ec93b)
+		// Auto-mounted to /efi or /boot by systemd-gpt-auto-generator
 		{"sgdisk", "--new=1:0:+2G", "--typecode=1:EF00", "--change-name=1:EFI", device},
-		// Create boot partition (1GB, type 8300)
-		{"sgdisk", "--new=2:0:+1G", "--typecode=2:8300", "--change-name=2:boot", device},
-		// Create first root partition (20GB, type 8300)
+		// Create boot partition (1GB, type bc13c2ff-59e6-4262-a352-b275fd6f7172 = XBOOTLDR)
+		// Auto-mounted to /boot by systemd-gpt-auto-generator
+		{"sgdisk", "--new=2:0:+1G", "--typecode=2:bc13c2ff-59e6-4262-a352-b275fd6f7172", "--change-name=2:boot", device},
+		// Create first root partition (20GB, type 8300 = generic Linux data)
+		// NOT using discoverable root partition type - root specified via kernel cmdline
 		{"sgdisk", "--new=3:0:+20G", "--typecode=3:8300", "--change-name=3:root1", device},
-		// Create second root partition (20GB, type 8300)
+		// Create second root partition (20GB, type 8300 = generic Linux data)
+		// NOT using discoverable root partition type - allows A/B updates with explicit control
 		{"sgdisk", "--new=4:0:+20G", "--typecode=4:8300", "--change-name=4:root2", device},
-		// Create /var partition (remaining space, type 8300)
+		// Create /var partition (remaining space, type 8300 = generic Linux data)
+		// NOT using auto-discoverable var type (4d21b016...) - would require machine-id binding
 		{"sgdisk", "--new=5:0:0", "--typecode=5:8300", "--change-name=5:var", device},
 	}
 

@@ -236,11 +236,19 @@ func (b *BootloaderInstaller) generateGRUBConfig() error {
 		}
 	}
 
+	// Get /var UUID for kernel command line mount
+	varUUID, err := GetPartitionUUID(b.Scheme.VarPartition)
+	if err != nil {
+		return fmt.Errorf("failed to get var UUID: %w", err)
+	}
+
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + rootUUID,
 		"ro",
 		"console=tty0",
+		// Mount /var via kernel command line (systemd.mount-extra)
+		"systemd.mount-extra=/var:UUID=" + varUUID + ":ext4:defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
@@ -310,6 +318,12 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		return fmt.Errorf("failed to get root UUID: %w", err)
 	}
 
+	// Get /var UUID for kernel command line mount
+	varUUID, err := GetPartitionUUID(b.Scheme.VarPartition)
+	if err != nil {
+		return fmt.Errorf("failed to get var UUID: %w", err)
+	}
+
 	// Find kernel on EFI partition (where systemd-boot expects them)
 	efiDir := filepath.Join(b.TargetDir, "boot", "efi")
 	kernels, err := filepath.Glob(filepath.Join(efiDir, "vmlinuz-*"))
@@ -337,6 +351,8 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 	kernelCmdline := []string{
 		"root=UUID=" + rootUUID,
 		"rw",
+		// Mount /var via kernel command line (systemd.mount-extra)
+		"systemd.mount-extra=/var:UUID=" + varUUID + ":ext4:defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 

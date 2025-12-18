@@ -282,51 +282,29 @@ func extractTar(r io.Reader, targetDir string) error {
 func CreateFstab(targetDir string, scheme *PartitionScheme) error {
 	fmt.Println("Creating /etc/fstab...")
 
-	// Get UUIDs for partitions
-	root1UUID, err := GetPartitionUUID(scheme.Root1Partition)
-	if err != nil {
-		return fmt.Errorf("failed to get root1 UUID: %w", err)
-	}
-
+	// Only need root2 UUID for the commented-out alternate root entry
 	root2UUID, err := GetPartitionUUID(scheme.Root2Partition)
 	if err != nil {
 		return fmt.Errorf("failed to get root2 UUID: %w", err)
 	}
 
-	bootUUID, err := GetPartitionUUID(scheme.BootPartition)
-	if err != nil {
-		return fmt.Errorf("failed to get boot UUID: %w", err)
-	}
-
-	efiUUID, err := GetPartitionUUID(scheme.EFIPartition)
-	if err != nil {
-		return fmt.Errorf("failed to get EFI UUID: %w", err)
-	}
-
-	varUUID, err := GetPartitionUUID(scheme.VarPartition)
-	if err != nil {
-		return fmt.Errorf("failed to get var UUID: %w", err)
-	}
-
 	// Create fstab content
+	// Note: /boot and /boot/efi are auto-mounted by systemd-gpt-auto-generator
+	// Note: /var is mounted via kernel command line (systemd.mount-extra)
 	fstabContent := fmt.Sprintf(`# /etc/fstab
 # Created by phukit
-
-# Root filesystem (root1 - active)
-UUID=%s	/		ext4	defaults	0 1
+#
+# Most mounts are handled automatically:
+# - Root: specified via kernel cmdline root=UUID parameter
+# - /boot: auto-mounted by systemd (XBOOTLDR partition type)
+# - /boot/efi: auto-mounted by systemd (ESP partition type)
+# - /var: mounted via kernel cmdline systemd.mount-extra parameter
+#
+# This file is kept minimal and can be empty on systems with discoverable partitions.
 
 # Second root filesystem (root2 - inactive/alternate)
 # UUID=%s	/		ext4	defaults	0 1
-
-# Boot partition
-UUID=%s	/boot		ext4	defaults	0 2
-
-# EFI System Partition
-UUID=%s	/boot/efi	vfat	umask=0077	0 2
-
-# Var partition
-UUID=%s	/var		ext4	defaults	0 2
-`, root1UUID, root2UUID, bootUUID, efiUUID, varUUID)
+`, root2UUID)
 
 	// Write fstab
 	fstabPath := filepath.Join(targetDir, "etc", "fstab")

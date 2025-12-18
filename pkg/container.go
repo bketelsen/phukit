@@ -402,3 +402,58 @@ func ChrootCommand(targetDir string, command string, args ...string) error {
 
 	return cmd.Run()
 }
+
+// ParseOSRelease reads and parses /etc/os-release from the target directory
+// Returns PRETTY_NAME if available, otherwise NAME, otherwise ID, or "Linux" as fallback
+func ParseOSRelease(targetDir string) string {
+	osReleasePath := filepath.Join(targetDir, "etc", "os-release")
+
+	// Try /etc/os-release first, then /usr/lib/os-release as fallback
+	data, err := os.ReadFile(osReleasePath)
+	if err != nil {
+		osReleasePath = filepath.Join(targetDir, "usr", "lib", "os-release")
+		data, err = os.ReadFile(osReleasePath)
+		if err != nil {
+			// File doesn't exist or can't be read
+			return "Linux"
+		}
+	}
+
+	// Parse the file for PRETTY_NAME, NAME, or ID
+	lines := strings.Split(string(data), "\n")
+	values := make(map[string]string)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Split on first =
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Remove quotes if present
+		value = strings.Trim(value, "\"'")
+
+		values[key] = value
+	}
+
+	// Return in priority order: PRETTY_NAME > NAME > ID > "Linux"
+	if prettyName, ok := values["PRETTY_NAME"]; ok && prettyName != "" {
+		return prettyName
+	}
+	if name, ok := values["NAME"]; ok && name != "" {
+		return name
+	}
+	if id, ok := values["ID"]; ok && id != "" {
+		return id
+	}
+
+	return "Linux"
+}

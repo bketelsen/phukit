@@ -193,7 +193,14 @@ func (b *BootcInstaller) Install() error {
 
 	// Step 6: Install bootloader
 	fmt.Println("\nStep 6/6: Installing bootloader...")
-	bootloader := NewBootloaderInstaller(b.MountPoint, b.Device, scheme)
+
+	// Parse OS information from the extracted container
+	osName := ParseOSRelease(b.MountPoint)
+	if b.Verbose {
+		fmt.Printf("  Detected OS: %s\n", osName)
+	}
+
+	bootloader := NewBootloaderInstaller(b.MountPoint, b.Device, scheme, osName)
 	bootloader.SetVerbose(b.Verbose)
 
 	// Add kernel arguments

@@ -23,17 +23,19 @@ type BootloaderInstaller struct {
 	Device     string
 	Scheme     *PartitionScheme
 	KernelArgs []string
+	OSName     string
 	Verbose    bool
 }
 
 // NewBootloaderInstaller creates a new BootloaderInstaller
-func NewBootloaderInstaller(targetDir, device string, scheme *PartitionScheme) *BootloaderInstaller {
+func NewBootloaderInstaller(targetDir, device string, scheme *PartitionScheme, osName string) *BootloaderInstaller {
 	return &BootloaderInstaller{
 		Type:       BootloaderGRUB2, // Default to GRUB2
 		TargetDir:  targetDir,
 		Device:     device,
 		Scheme:     scheme,
 		KernelArgs: []string{},
+		OSName:     osName,
 	}
 }
 
@@ -246,11 +248,11 @@ func (b *BootloaderInstaller) generateGRUBConfig() error {
 	grubCfg := fmt.Sprintf(`set timeout=5
 set default=0
 
-menuentry 'Linux' {
+menuentry '%s' {
     linux /vmlinuz-%s %s
     initrd /%s
 }
-`, kernelVersion, strings.Join(kernelCmdline, " "), initrd)
+`, b.OSName, kernelVersion, strings.Join(kernelCmdline, " "), initrd)
 
 	// Write GRUB config
 	grubDir := filepath.Join(b.TargetDir, "boot", "grub")
@@ -360,11 +362,11 @@ editor yes
 		return fmt.Errorf("failed to create entries directory: %w", err)
 	}
 
-	entry := fmt.Sprintf(`title   Linux
+	entry := fmt.Sprintf(`title   %s
 linux   /vmlinuz-%s
 initrd  /%s
 options %s
-`, kernelVersion, initrd, strings.Join(kernelCmdline, " "))
+`, b.OSName, kernelVersion, initrd, strings.Join(kernelCmdline, " "))
 
 	entryPath := filepath.Join(entriesDir, "bootc.conf")
 	if err := os.WriteFile(entryPath, []byte(entry), 0644); err != nil {
@@ -374,6 +376,15 @@ options %s
 	fmt.Println("  Created systemd-boot configuration")
 	return nil
 }
+
+// func canSystemdSecureBoot(targetDir string) bool {
+// 	// Check for presence of shimx64.efi in the targetDir
+// 	shimPath := filepath.Join(targetDir, "usr", "lib", "shim", "shimx64.efi.signed")
+// 	if _, err := os.Stat(shimPath); err == nil {
+// 		return true
+// 	}
+// 	return false
+// }
 
 // DetectBootloader detects which bootloader should be used based on the container
 func DetectBootloader(targetDir string) BootloaderType {

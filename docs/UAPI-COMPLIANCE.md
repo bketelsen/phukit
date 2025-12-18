@@ -34,14 +34,14 @@ We use the correct GPT partition type GUIDs:
 
 Per the specification's recommendations:
 
-```
+```text
 /efi     → ESP (EFI System Partition)
 /boot    → XBOOTLDR (Extended Boot Loader Partition)
 ```
 
 **NOT** the traditional nested structure:
 
-```
+```text
 ❌ /boot/efi  → ESP (deprecated, causes autofs complications)
 ```
 
@@ -49,7 +49,7 @@ Per the specification's recommendations:
 
 Boot loader entries are stored in:
 
-```
+```text
 /boot/loader/entries/*.conf
 ```
 
@@ -59,7 +59,7 @@ This is on the XBOOTLDR partition (`/boot`), **not** on the ESP (`/efi`).
 
 Kernel and initramfs files are stored in:
 
-```
+```text
 /boot/vmlinuz-*
 /boot/initramfs-*.img
 ```

@@ -10,7 +10,7 @@ The `phukit update` command implements an A/B (dual root) update system that ena
 
 Per UAPI Boot Loader Specification:
 
-```
+```text
 /dev/sdX1 - EFI (2GB)          - ESP: Bootloader binaries (mounted at /efi)
 /dev/sdX2 - Boot (1GB)         - XBOOTLDR: Kernels, initramfs, boot entries (mounted at /boot)
 /dev/sdX3 - Root1 (12GB)       - Primary root filesystem
@@ -91,14 +91,14 @@ After an update, the boot menu provides two options:
 
 **For systemd-boot** (in `/boot/loader/entries/` per UAPI spec):
 
-```
+```text
 1. [OS Name]            - New system (default, bootc.conf)
 2. [OS Name] (Previous) - Previous system (rollback, bootc-previous.conf)
 ```
 
 **For GRUB2**:
 
-```
+```text
 1. [OS Name]            - New system (default)
 2. [OS Name] (Previous) - Previous system (rollback)
 ```

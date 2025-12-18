@@ -63,9 +63,10 @@ To test with a private image:
    ```
 
 2. **Run tests with your image**:
-   ```bash
-   TEST_IMAGE=ghcr.io/myorg/myimage:latest sudo -E ./test_incus.sh
-   ```
+
+```bash
+TEST_IMAGE=ghcr.io/myorg/myimage:latest sudo -E ./test_incus.sh
+```
 
 The test will use credentials from `~/.docker/config.json` automatically.
 

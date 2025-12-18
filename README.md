@@ -58,7 +58,7 @@ The image should contain:
 
 ### Example Image Structure
 
-```
+```text
 /
 ├── usr/
 │   ├── bin/
@@ -169,7 +169,7 @@ phukit list -v
 
 Example output:
 
-```
+```text
 Available disks:
 
 Device: /dev/sda

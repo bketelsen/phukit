@@ -48,7 +48,7 @@ Successfully refactored `phukit` to perform bootc-compatible container installat
 
 The complete installation workflow (6 steps):
 
-```
+```text
 1. Create Partitions
    └─ sgdisk creates GPT with EFI/boot/root1/root2/var partitions
       ├─ EFI: 2GB (ESP partition type c12a7328-f81f-11d2-ba4b-00a0c93ec93b)

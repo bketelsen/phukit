@@ -594,6 +594,9 @@ func (u *SystemUpdater) updateGRUBBootloader() error {
 	}
 	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
 
+	// Get OS name from the updated system
+	osName := ParseOSRelease(u.Config.MountPoint)
+
 	// Find GRUB directory
 	grubDirs := []string{
 		filepath.Join(u.Config.BootMountPoint, "grub"),
@@ -623,17 +626,17 @@ func (u *SystemUpdater) updateGRUBBootloader() error {
 	grubCfg := fmt.Sprintf(`set timeout=5
 set default=0
 
-menuentry 'Linux (Updated)' {
+menuentry '%s' {
     linux /vmlinuz-%s %s
     initrd /%s
 }
 
-menuentry 'Linux (Previous)' {
+menuentry '%s (Previous)' {
     linux /vmlinuz-%s root=UUID=%s ro console=tty0
     initrd /%s
 }
-`, kernelVersion, strings.Join(kernelCmdline, " "), initrd,
-		kernelVersion, activeUUID, initrd)
+`, osName, kernelVersion, strings.Join(kernelCmdline, " "), initrd,
+		osName, kernelVersion, activeUUID, initrd)
 
 	grubCfgPath := filepath.Join(grubDir, "grub.cfg")
 	if err := os.WriteFile(grubCfgPath, []byte(grubCfg), 0644); err != nil {
@@ -688,9 +691,12 @@ func (u *SystemUpdater) updateSystemdBootBootloader() error {
 	}
 	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
 
-	// Update loader.conf to default to the updated entry
+	// Get OS name from the updated system
+	osName := ParseOSRelease(u.Config.MountPoint)
+
+	// Update loader.conf to default to bootc entry
 	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
-	loaderConf := `default bootc-updated
+	loaderConf := `default bootc
 timeout 5
 console-mode max
 editor yes
@@ -700,33 +706,33 @@ editor yes
 		return fmt.Errorf("failed to write loader.conf: %w", err)
 	}
 
-	// Create updated boot entry
+	// Create/update main boot entry (always points to newest system)
 	entriesDir := filepath.Join(loaderDir, "entries")
 	if err := os.MkdirAll(entriesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create entries directory: %w", err)
 	}
 
-	updatedEntry := fmt.Sprintf(`title   Linux (Updated)
+	mainEntry := fmt.Sprintf(`title   %s
 linux   /vmlinuz-%s
 initrd  /%s
 options %s
-`, kernelVersion, initrd, strings.Join(kernelCmdline, " "))
+`, osName, kernelVersion, initrd, strings.Join(kernelCmdline, " "))
 
-	updatedEntryPath := filepath.Join(entriesDir, "bootc-updated.conf")
-	if err := os.WriteFile(updatedEntryPath, []byte(updatedEntry), 0644); err != nil {
-		return fmt.Errorf("failed to write updated boot entry: %w", err)
+	mainEntryPath := filepath.Join(entriesDir, "bootc.conf")
+	if err := os.WriteFile(mainEntryPath, []byte(mainEntry), 0644); err != nil {
+		return fmt.Errorf("failed to write main boot entry: %w", err)
 	}
 
-	// Create previous boot entry
-	previousEntry := fmt.Sprintf(`title   Linux (Previous)
+	// Create/update rollback boot entry (points to previous system)
+	previousEntry := fmt.Sprintf(`title   %s (Previous)
 linux   /vmlinuz-%s
 initrd  /%s
 options root=UUID=%s ro
-`, kernelVersion, initrd, activeUUID)
+`, osName, kernelVersion, initrd, activeUUID)
 
 	previousEntryPath := filepath.Join(entriesDir, "bootc-previous.conf")
 	if err := os.WriteFile(previousEntryPath, []byte(previousEntry), 0644); err != nil {
-		return fmt.Errorf("failed to write previous boot entry: %w", err)
+		return fmt.Errorf("failed to write rollback boot entry: %w", err)
 	}
 
 	fmt.Printf("  Updated systemd-boot to boot from %s\n", u.Target)

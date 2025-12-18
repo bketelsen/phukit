@@ -95,7 +95,7 @@ func (o *OutputWriter) PhaseStart(step int, name string) {
 			Timestamp:  time.Now().Format(time.RFC3339),
 		})
 	} else {
-		fmt.Fprintf(o.writer, "\nStep %d/%d: %s...\n", step, o.totalSteps, name)
+		_, _ = fmt.Fprintf(o.writer, "\nStep %d/%d: %s...\n", step, o.totalSteps, name)
 	}
 }
 
@@ -135,7 +135,7 @@ func (o *OutputWriter) Log(message string) {
 			Timestamp:  time.Now().Format(time.RFC3339),
 		})
 	} else {
-		fmt.Fprintln(o.writer, message)
+		_, _ = fmt.Fprintln(o.writer, message)
 	}
 }
 
@@ -162,7 +162,7 @@ func (o *OutputWriter) Warning(message string) {
 			Timestamp:  time.Now().Format(time.RFC3339),
 		})
 	} else {
-		fmt.Fprintf(o.writer, "Warning: %s\n", message)
+		_, _ = fmt.Fprintf(o.writer, "Warning: %s\n", message)
 	}
 }
 
@@ -185,7 +185,7 @@ func (o *OutputWriter) Error(err error) {
 			Timestamp:  time.Now().Format(time.RFC3339),
 		})
 	} else {
-		fmt.Fprintf(o.writer, "Error: %s\n", message)
+		_, _ = fmt.Fprintf(o.writer, "Error: %s\n", message)
 	}
 }
 
@@ -212,11 +212,11 @@ func (o *OutputWriter) Complete(success bool, err error) {
 		})
 	} else {
 		if success {
-			fmt.Fprintln(o.writer, "\n"+strings.Repeat("=", 60))
-			fmt.Fprintf(o.writer, "Operation completed successfully!\n")
-			fmt.Fprintln(o.writer, strings.Repeat("=", 60))
+			_, _ = fmt.Fprintln(o.writer, "\n"+strings.Repeat("=", 60))
+			_, _ = fmt.Fprintf(o.writer, "Operation completed successfully!\n")
+			_, _ = fmt.Fprintln(o.writer, strings.Repeat("=", 60))
 		} else {
-			fmt.Fprintf(o.writer, "\nOperation failed: %s\n", errorMsg)
+			_, _ = fmt.Fprintf(o.writer, "\nOperation failed: %s\n", errorMsg)
 		}
 	}
 }
@@ -234,10 +234,10 @@ func (o *OutputWriter) emitJSON(event OutputEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		// Fallback to text output if JSON marshaling fails
-		fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
 		return
 	}
-	fmt.Fprintln(o.writer, string(data))
+	_, _ = fmt.Fprintln(o.writer, string(data))
 }
 
 // IsJSON returns true if the output format is JSON

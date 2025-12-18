@@ -12,8 +12,8 @@ import (
 type PartitionScheme struct {
 	EFIPartition   string // EFI System Partition
 	BootPartition  string // /boot partition
-	Root1Partition string // First root filesystem partition (20GB)
-	Root2Partition string // Second root filesystem partition (20GB)
+	Root1Partition string // First root filesystem partition (12GB)
+	Root2Partition string // Second root filesystem partition (12GB)
 	VarPartition   string // /var partition (remaining space)
 }
 
@@ -36,8 +36,8 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 	// Use sgdisk to create partitions
 	// Partition 1: EFI System Partition (2GB)
 	// Partition 2: /boot partition (1GB)
-	// Partition 3: First root filesystem (20GB)
-	// Partition 4: Second root filesystem (20GB)
+	// Partition 3: First root filesystem (12GB)
+	// Partition 4: Second root filesystem (12GB)
 	// Partition 5: /var partition (remaining space)
 
 	commands := [][]string{
@@ -49,12 +49,12 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 		// Create boot partition (1GB, type bc13c2ff-59e6-4262-a352-b275fd6f7172 = XBOOTLDR)
 		// Auto-mounted to /boot by systemd-gpt-auto-generator
 		{"sgdisk", "--new=2:0:+1G", "--typecode=2:bc13c2ff-59e6-4262-a352-b275fd6f7172", "--change-name=2:boot", device},
-		// Create first root partition (20GB, type 8300 = generic Linux data)
+		// Create first root partition (12GB, type 8300 = generic Linux data)
 		// NOT using discoverable root partition type - root specified via kernel cmdline
-		{"sgdisk", "--new=3:0:+20G", "--typecode=3:8300", "--change-name=3:root1", device},
-		// Create second root partition (20GB, type 8300 = generic Linux data)
+		{"sgdisk", "--new=3:0:+12G", "--typecode=3:8300", "--change-name=3:root1", device},
+		// Create second root partition (12GB, type 8300 = generic Linux data)
 		// NOT using discoverable root partition type - allows A/B updates with explicit control
-		{"sgdisk", "--new=4:0:+20G", "--typecode=4:8300", "--change-name=4:root2", device},
+		{"sgdisk", "--new=4:0:+12G", "--typecode=4:8300", "--change-name=4:root2", device},
 		// Create /var partition (remaining space, type 8300 = generic Linux data)
 		// NOT using auto-discoverable var type (4d21b016...) - would require machine-id binding
 		{"sgdisk", "--new=5:0:0", "--typecode=5:8300", "--change-name=5:var", device},

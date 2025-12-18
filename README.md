@@ -283,8 +283,8 @@ phukit install --image IMAGE --device DEVICE --dry-run
 
 1. **EFI System Partition** (2GB, FAT32): UEFI boot files and bootloader
 2. **Boot Partition** (1GB, ext4): Shared kernel and initramfs files
-3. **Root Partition 1** (20GB, ext4): First root filesystem (OS A)
-4. **Root Partition 2** (20GB, ext4): Second root filesystem (OS B)
+3. **Root Partition 1** (12GB, ext4): First root filesystem (OS A)
+4. **Root Partition 2** (12GB, ext4): Second root filesystem (OS B)
 5. **Var Partition** (remaining space, ext4): Shared `/var` for both systems
 
 This layout enables:

@@ -11,8 +11,8 @@ The `phukit update` command implements an A/B (dual root) update system that ena
 ```
 /dev/sdX1 - EFI (2GB)          - Boot files
 /dev/sdX2 - Boot (1GB)         - Kernels and initramfs
-/dev/sdX3 - Root1 (20GB)       - Primary root filesystem
-/dev/sdX4 - Root2 (20GB)       - Secondary root filesystem
+/dev/sdX3 - Root1 (12GB)       - Primary root filesystem
+/dev/sdX4 - Root2 (12GB)       - Secondary root filesystem
 /dev/sdX5 - Var (remaining)    - Shared /var data
 ```
 

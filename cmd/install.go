@@ -24,7 +24,7 @@ This command will:
   1. Validate the target disk
   2. Pull the container image (unless --skip-pull is specified)
   3. Wipe the disk (after confirmation)
-  4. Create partitions (EFI: 2GB, boot: 1GB, root1: 20GB, root2: 20GB, var: remaining)
+  4. Create partitions (EFI: 2GB, boot: 1GB, root1: 12GB, root2: 12GB, var: remaining)
   5. Extract container filesystem
   6. Configure system and install bootloader
   7. Verify the installation

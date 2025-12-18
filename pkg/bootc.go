@@ -20,6 +20,7 @@ type BootcInstaller struct {
 	DryRun     bool
 	KernelArgs []string
 	MountPoint string
+	Output     *OutputWriter
 }
 
 // NewBootcInstaller creates a new BootcInstaller
@@ -29,7 +30,13 @@ func NewBootcInstaller(imageRef, device string) *BootcInstaller {
 		Device:     device,
 		KernelArgs: []string{},
 		MountPoint: "/tmp/phukit-install",
+		Output:     NewOutputWriter(OutputFormatText, os.Stdout, false),
 	}
+}
+
+// SetOutput sets the output writer
+func (b *BootcInstaller) SetOutput(output *OutputWriter) {
+	b.Output = output
 }
 
 // SetVerbose enables verbose output
@@ -83,11 +90,11 @@ func CheckRequiredTools() error {
 // The actual image pull happens during Extract() to avoid duplicate work
 func (b *BootcInstaller) PullImage() error {
 	if b.DryRun {
-		fmt.Printf("[DRY RUN] Would pull image: %s\n", b.ImageRef)
+		b.Output.Log(fmt.Sprintf("[DRY RUN] Would pull image: %s", b.ImageRef))
 		return nil
 	}
 
-	fmt.Printf("Validating image reference: %s\n", b.ImageRef)
+	b.Output.Log(fmt.Sprintf("Validating image reference: %s", b.ImageRef))
 
 	// Parse and validate the image reference
 	ref, err := name.ParseReference(b.ImageRef)
@@ -95,8 +102,8 @@ func (b *BootcInstaller) PullImage() error {
 		return fmt.Errorf("invalid image reference: %w", err)
 	}
 
-	if b.Verbose {
-		fmt.Printf("  Image: %s\n", ref.String())
+	if b.Verbose && !b.Output.IsJSON() {
+		b.Output.Log(fmt.Sprintf("  Image: %s", ref.String()))
 	}
 
 	// Try to get image descriptor to verify it exists and is accessible
@@ -106,76 +113,92 @@ func (b *BootcInstaller) PullImage() error {
 		return fmt.Errorf("failed to access image: %w (check credentials if private registry)", err)
 	}
 
-	fmt.Println("  Image reference is valid and accessible")
+	b.Output.Log("  Image reference is valid and accessible")
 	return nil
 }
 
 // Install performs the bootc installation to the target disk
 func (b *BootcInstaller) Install() error {
 	if b.DryRun {
-		fmt.Printf("[DRY RUN] Would install %s to %s\n", b.ImageRef, b.Device)
+		b.Output.Log(fmt.Sprintf("[DRY RUN] Would install %s to %s", b.ImageRef, b.Device))
 		if len(b.KernelArgs) > 0 {
-			fmt.Printf("[DRY RUN] With kernel arguments: %s\n", strings.Join(b.KernelArgs, " "))
+			b.Output.Log(fmt.Sprintf("[DRY RUN] With kernel arguments: %s", strings.Join(b.KernelArgs, " ")))
 		}
 		return nil
 	}
 
-	fmt.Printf("Installing bootc image to disk...\n")
-	fmt.Printf("  Image:  %s\n", b.ImageRef)
-	fmt.Printf("  Device: %s\n", b.Device)
-	fmt.Println()
+	b.Output.SetPhase("install", 6)
+
+	if !b.Output.IsJSON() {
+		b.Output.Log("Installing bootc image to disk...")
+		b.Output.Log(fmt.Sprintf("  Image:  %s", b.ImageRef))
+		b.Output.Log(fmt.Sprintf("  Device: %s", b.Device))
+	}
 
 	// Step 1: Create partitions
-	fmt.Println("Step 1/6: Creating partitions...")
+	b.Output.PhaseStart(1, "Create Partitions")
 	scheme, err := CreatePartitions(b.Device, b.DryRun)
 	if err != nil {
+		b.Output.Error(fmt.Errorf("failed to create partitions: %w", err))
 		return fmt.Errorf("failed to create partitions: %w", err)
 	}
+	b.Output.PhaseComplete(1, "Create Partitions")
 
 	// Step 2: Format partitions
-	fmt.Println("\nStep 2/6: Formatting partitions...")
+	b.Output.PhaseStart(2, "Format Partitions")
 	if err := FormatPartitions(scheme, b.DryRun); err != nil {
+		b.Output.Error(fmt.Errorf("failed to format partitions: %w", err))
 		return fmt.Errorf("failed to format partitions: %w", err)
 	}
+	b.Output.PhaseComplete(2, "Format Partitions")
 
 	// Step 3: Mount partitions
-	fmt.Println("\nStep 3/6: Mounting partitions...")
+	b.Output.PhaseStart(3, "Mount Partitions")
 	if err := MountPartitions(scheme, b.MountPoint, b.DryRun); err != nil {
+		b.Output.Error(fmt.Errorf("failed to mount partitions: %w", err))
 		return fmt.Errorf("failed to mount partitions: %w", err)
 	}
+	b.Output.PhaseComplete(3, "Mount Partitions")
 
 	// Ensure cleanup on error
 	defer func() {
 		if !b.DryRun {
-			fmt.Println("\nCleaning up...")
+			if !b.Output.IsJSON() {
+				b.Output.Log("\nCleaning up...")
+			}
 			_ = UnmountPartitions(b.MountPoint, b.DryRun)
 			_ = os.RemoveAll(b.MountPoint)
 		}
 	}()
 
 	// Step 4: Extract container filesystem
-	fmt.Println("\nStep 4/6: Extracting container filesystem...")
+	b.Output.PhaseStart(4, "Extract Container Filesystem")
 	extractor := NewContainerExtractor(b.ImageRef, b.MountPoint)
 	extractor.SetVerbose(b.Verbose)
 	if err := extractor.Extract(); err != nil {
+		b.Output.Error(fmt.Errorf("failed to extract container: %w", err))
 		return fmt.Errorf("failed to extract container: %w", err)
 	}
+	b.Output.PhaseComplete(4, "Extract Container Filesystem")
 
 	// Step 5: Configure system
-	fmt.Println("\nStep 5/6: Configuring system...")
+	b.Output.PhaseStart(5, "Configure System")
 
 	// Create fstab
 	if err := CreateFstab(b.MountPoint, scheme); err != nil {
+		b.Output.Error(fmt.Errorf("failed to create fstab: %w", err))
 		return fmt.Errorf("failed to create fstab: %w", err)
 	}
 
 	// Setup system directories
 	if err := SetupSystemDirectories(b.MountPoint); err != nil {
+		b.Output.Error(fmt.Errorf("failed to setup directories: %w", err))
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
 	// Save pristine /etc for future updates
 	if err := SavePristineEtc(b.MountPoint, b.DryRun); err != nil {
+		b.Output.Error(fmt.Errorf("failed to save pristine /etc: %w", err))
 		return fmt.Errorf("failed to save pristine /etc: %w", err)
 	}
 
@@ -188,16 +211,18 @@ func (b *BootcInstaller) Install() error {
 		BootloaderType: string(DetectBootloader(b.MountPoint)),
 	}
 	if err := WriteSystemConfigToTarget(b.MountPoint, config, b.DryRun); err != nil {
+		b.Output.Error(fmt.Errorf("failed to write system config: %w", err))
 		return fmt.Errorf("failed to write system config: %w", err)
 	}
+	b.Output.PhaseComplete(5, "Configure System")
 
 	// Step 6: Install bootloader
-	fmt.Println("\nStep 6/6: Installing bootloader...")
+	b.Output.PhaseStart(6, "Install Bootloader")
 
 	// Parse OS information from the extracted container
 	osName := ParseOSRelease(b.MountPoint)
-	if b.Verbose {
-		fmt.Printf("  Detected OS: %s\n", osName)
+	if b.Verbose && !b.Output.IsJSON() {
+		b.Output.Log(fmt.Sprintf("  Detected OS: %s", osName))
 	}
 
 	bootloader := NewBootloaderInstaller(b.MountPoint, b.Device, scheme, osName)
@@ -213,23 +238,23 @@ func (b *BootcInstaller) Install() error {
 	bootloader.SetType(bootloaderType)
 
 	if err := bootloader.Install(); err != nil {
+		b.Output.Error(fmt.Errorf("failed to install bootloader: %w", err))
 		return fmt.Errorf("failed to install bootloader: %w", err)
 	}
+	b.Output.PhaseComplete(6, "Install Bootloader")
 
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("Installation completed successfully!")
-	fmt.Println(strings.Repeat("=", 60))
+	b.Output.Complete(true, nil)
 	return nil
 }
 
 // Verify performs post-installation verification
 func (b *BootcInstaller) Verify() error {
 	if b.DryRun {
-		fmt.Println("[DRY RUN] Would verify installation")
+		b.Output.Log("[DRY RUN] Would verify installation")
 		return nil
 	}
 
-	fmt.Println("Verifying installation...")
+	b.Output.Log("Verifying installation...")
 
 	// Check if the device has partitions now
 	deviceName := strings.TrimPrefix(b.Device, "/dev/")
@@ -242,9 +267,11 @@ func (b *BootcInstaller) Verify() error {
 		return fmt.Errorf("no partitions found on device after installation")
 	}
 
-	fmt.Printf("Found %d partition(s) on %s\n", len(diskInfo.Partitions), b.Device)
-	for _, part := range diskInfo.Partitions {
-		fmt.Printf("  - %s (%s)\n", part.Device, FormatSize(part.Size))
+	b.Output.Log(fmt.Sprintf("Found %d partition(s) on %s", len(diskInfo.Partitions), b.Device))
+	if !b.Output.IsJSON() {
+		for _, part := range diskInfo.Partitions {
+			b.Output.Log(fmt.Sprintf("  - %s (%s)", part.Device, FormatSize(part.Size)))
+		}
 	}
 
 	return nil
@@ -253,7 +280,7 @@ func (b *BootcInstaller) Verify() error {
 // InstallComplete performs the complete installation workflow
 func (b *BootcInstaller) InstallComplete(skipPull bool) error {
 	// Check prerequisites
-	fmt.Println("Checking prerequisites...")
+	b.Output.Log("Checking prerequisites...")
 	if err := CheckRequiredTools(); err != nil {
 		return fmt.Errorf("missing required tools: %w", err)
 	}
@@ -262,7 +289,7 @@ func (b *BootcInstaller) InstallComplete(skipPull bool) error {
 	}
 
 	// Validate disk
-	fmt.Printf("Validating disk %s...\n", b.Device)
+	b.Output.Log(fmt.Sprintf("Validating disk %s...", b.Device))
 	minSize := uint64(10 * 1024 * 1024 * 1024) // 10 GB minimum
 	if err := ValidateDisk(b.Device, minSize); err != nil {
 		return err
@@ -275,35 +302,39 @@ func (b *BootcInstaller) InstallComplete(skipPull bool) error {
 		}
 	}
 
-	// Confirm before wiping
-	if !b.DryRun {
-		fmt.Printf("\n%s\n", strings.Repeat("=", 60))
-		fmt.Printf("WARNING: This will DESTROY ALL DATA on %s!\n", b.Device)
-		fmt.Printf("%s\n", strings.Repeat("=", 60))
+	// Confirm before wiping (skip prompt in JSON mode)
+	if !b.DryRun && !b.Output.IsJSON() {
+		b.Output.Log("")
+		b.Output.Log(strings.Repeat("=", 60))
+		b.Output.Log(fmt.Sprintf("WARNING: This will DESTROY ALL DATA on %s!", b.Device))
+		b.Output.Log(strings.Repeat("=", 60))
 		fmt.Print("Type 'yes' to continue: ")
 		var response string
 		_, _ = fmt.Scanln(&response)
 		if response != "yes" {
 			return fmt.Errorf("installation cancelled by user")
 		}
-		fmt.Println()
+		b.Output.Log("")
 	}
 
 	// Wipe disk
-	fmt.Printf("Wiping disk %s...\n", b.Device)
+	b.Output.Log(fmt.Sprintf("Wiping disk %s...", b.Device))
 	if err := WipeDisk(b.Device, b.DryRun); err != nil {
 		return err
 	}
-	fmt.Println()
+	if !b.Output.IsJSON() {
+		b.Output.Log("")
+	}
 
 	// Install
 	if err := b.Install(); err != nil {
+		b.Output.Complete(false, err)
 		return err
 	}
 
 	// Verify
 	if err := b.Verify(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: verification failed: %v\n", err)
+		b.Output.Warning(fmt.Sprintf("verification failed: %v", err))
 	}
 
 	return nil

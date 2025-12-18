@@ -135,6 +135,7 @@ type SystemUpdater struct {
 	Scheme *PartitionScheme
 	Active bool // true if root1 is active, false if root2 is active
 	Target string
+	Output *OutputWriter
 }
 
 // NewSystemUpdater creates a new SystemUpdater
@@ -146,7 +147,13 @@ func NewSystemUpdater(device, imageRef string) *SystemUpdater {
 			MountPoint:     "/tmp/phukit-update",
 			BootMountPoint: "/tmp/phukit-boot",
 		},
+		Output: NewOutputWriter(OutputFormatText, os.Stdout, false),
 	}
+}
+
+// SetOutput sets the output writer
+func (u *SystemUpdater) SetOutput(output *OutputWriter) {
+	u.Output = output
 }
 
 // SetVerbose enables verbose output
@@ -171,7 +178,7 @@ func (u *SystemUpdater) AddKernelArg(arg string) {
 
 // PrepareUpdate prepares for an update by detecting partitions and determining target
 func (u *SystemUpdater) PrepareUpdate() error {
-	fmt.Println("Preparing for system update...")
+	u.Output.Log("Preparing for system update...")
 
 	// Detect existing partition scheme
 	scheme, err := DetectExistingPartitionScheme(u.Config.Device)
@@ -189,11 +196,11 @@ func (u *SystemUpdater) PrepareUpdate() error {
 	u.Active = active
 
 	if u.Active {
-		fmt.Printf("Currently booted from: %s (root1)\n", scheme.Root1Partition)
-		fmt.Printf("Update target: %s (root2)\n", u.Target)
+		u.Output.Logf("Currently booted from: %s (root1)", scheme.Root1Partition)
+		u.Output.Logf("Update target: %s (root2)", u.Target)
 	} else {
-		fmt.Printf("Currently booted from: %s (root2)\n", scheme.Root2Partition)
-		fmt.Printf("Update target: %s (root1)\n", u.Target)
+		u.Output.Logf("Currently booted from: %s (root2)", scheme.Root2Partition)
+		u.Output.Logf("Update target: %s (root1)", u.Target)
 	}
 
 	return nil
@@ -203,11 +210,11 @@ func (u *SystemUpdater) PrepareUpdate() error {
 // The actual image pull happens during Extract() to avoid duplicate work
 func (u *SystemUpdater) PullImage() error {
 	if u.Config.DryRun {
-		fmt.Printf("[DRY RUN] Would pull image: %s\n", u.Config.ImageRef)
+		u.Output.Logf("[DRY RUN] Would pull image: %s", u.Config.ImageRef)
 		return nil
 	}
 
-	fmt.Printf("Validating image reference: %s\n", u.Config.ImageRef)
+	u.Output.Logf("Validating image reference: %s", u.Config.ImageRef)
 
 	// Parse and validate the image reference
 	ref, err := name.ParseReference(u.Config.ImageRef)
@@ -216,7 +223,7 @@ func (u *SystemUpdater) PullImage() error {
 	}
 
 	if u.Config.Verbose {
-		fmt.Printf("  Image: %s\n", ref.String())
+		u.Output.Logf("  Image: %s", ref.String())
 	}
 
 	// Try to get image descriptor to verify it exists and is accessible
@@ -225,21 +232,21 @@ func (u *SystemUpdater) PullImage() error {
 		return fmt.Errorf("failed to access image: %w (check credentials if private registry)", err)
 	}
 
-	fmt.Println("  Image reference is valid and accessible")
+	u.Output.Log("  Image reference is valid and accessible")
 	return nil
 }
 
 // Update performs the system update
 func (u *SystemUpdater) Update() error {
 	if u.Config.DryRun {
-		fmt.Printf("[DRY RUN] Would update to partition: %s\n", u.Target)
+		u.Output.Logf("[DRY RUN] Would update to partition: %s", u.Target)
 		return nil
 	}
 
-	fmt.Println("\nStarting system update...")
+	u.Output.SetPhase("update", 7)
+	u.Output.PhaseStart(1, "Mounting target partition")
 
 	// Step 1: Mount target partition
-	fmt.Println("\nStep 1/7: Mounting target partition...")
 	if err := os.MkdirAll(u.Config.MountPoint, 0755); err != nil {
 		return fmt.Errorf("failed to create mount point: %w", err)
 	}
@@ -249,13 +256,12 @@ func (u *SystemUpdater) Update() error {
 		return fmt.Errorf("failed to mount target partition: %w\nOutput: %s", err, string(output))
 	}
 	defer func() {
-		fmt.Println("\nCleaning up...")
+		u.Output.Log("Cleaning up...")
 		_ = exec.Command("umount", u.Config.MountPoint).Run()
 		_ = os.RemoveAll(u.Config.MountPoint)
 	}()
 
 	// Step 2: Clear existing content
-	fmt.Println("\nStep 2/7: Clearing old content from target partition...")
 	entries, err := os.ReadDir(u.Config.MountPoint)
 	if err != nil {
 		return fmt.Errorf("failed to read target directory: %w", err)
@@ -268,7 +274,7 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 3: Extract new container filesystem
-	fmt.Println("\nStep 3/7: Extracting new container filesystem...")
+	u.Output.PhaseStart(3, "Extracting new container filesystem")
 	extractor := NewContainerExtractor(u.Config.ImageRef, u.Config.MountPoint)
 	extractor.SetVerbose(u.Config.Verbose)
 	if err := extractor.Extract(); err != nil {
@@ -276,7 +282,7 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 4: Merge /etc configuration from active system
-	fmt.Println("\nStep 4/7: Preserving user configuration...")
+	u.Output.PhaseStart(4, "Preserving user configuration")
 	activeRoot := u.Scheme.Root1Partition
 	if !u.Active {
 		activeRoot = u.Scheme.Root2Partition
@@ -286,28 +292,26 @@ func (u *SystemUpdater) Update() error {
 	}
 
 	// Step 5: Setup system directories
-	fmt.Println("\nStep 5/7: Setting up system directories...")
+	u.Output.PhaseStart(5, "Setting up system directories")
 	if err := SetupSystemDirectories(u.Config.MountPoint); err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
 	// Step 6: Install new kernel and initramfs if present
-	fmt.Println("\nStep 6/7: Checking for new kernel and initramfs...")
+	u.Output.PhaseStart(6, "Checking for new kernel and initramfs")
 	if err := u.InstallKernelAndInitramfs(); err != nil {
 		return fmt.Errorf("failed to install kernel/initramfs: %w", err)
 	}
 
 	// Step 7: Update bootloader configuration
-	fmt.Println("\nStep 7/7: Updating bootloader configuration...")
+	u.Output.PhaseStart(7, "Updating bootloader configuration")
 	if err := u.UpdateBootloader(); err != nil {
 		return fmt.Errorf("failed to update bootloader: %w", err)
 	}
 
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("System update completed successfully!")
-	fmt.Printf("Next boot will use: %s\n", u.Target)
-	fmt.Println("Reboot to activate the new system")
-	fmt.Println(strings.Repeat("=", 60))
+	u.Output.Logf("Next boot will use: %s", u.Target)
+	u.Output.Log("Reboot to activate the new system")
+	u.Output.Complete(true, nil)
 
 	return nil
 }
@@ -321,7 +325,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	// Find kernel version directories
 	entries, err := os.ReadDir(modulesDir)
 	if err != nil || len(entries) == 0 {
-		fmt.Println("  No kernel modules found in updated image")
+		u.Output.Log("  No kernel modules found in updated image")
 		return nil
 	}
 
@@ -353,7 +357,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 
 	// Detect bootloader type
 	bootloaderType := u.detectBootloaderTypeFromMount(bootMountPoint, efiMountPoint)
-	fmt.Printf("  Detected bootloader: %s\n", bootloaderType)
+	u.Output.Logf("  Detected bootloader: %s", bootloaderType)
 
 	// Per UAPI spec: kernels always go to /boot (XBOOTLDR) for both bootloaders
 	kernelDestDir := bootMountPoint
@@ -403,14 +407,14 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 		needsCopy := false
 		if !existingKernelMap[kernelName] {
 			needsCopy = true
-			fmt.Printf("  Found new kernel: %s\n", kernelName)
+			u.Output.Logf("  Found new kernel: %s", kernelName)
 		} else {
 			// Compare file sizes to detect changes
 			srcInfo, _ := os.Stat(srcKernel)
 			dstInfo, _ := os.Stat(destKernel)
 			if srcInfo.Size() != dstInfo.Size() {
 				needsCopy = true
-				fmt.Printf("  Kernel %s has changed, updating\n", kernelName)
+				u.Output.Logf("  Kernel %s has changed, updating", kernelName)
 			}
 		}
 
@@ -418,7 +422,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 			if err := copyFile(srcKernel, destKernel); err != nil {
 				return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
 			}
-			fmt.Printf("  Installed kernel: %s\n", kernelName)
+			u.Output.Logf("  Installed kernel: %s", kernelName)
 			copiedKernel = true
 		}
 
@@ -439,17 +443,17 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 				needsCopy := false
 				if dstInitrd, err := os.Stat(destInitrd); os.IsNotExist(err) {
 					needsCopy = true
-					fmt.Printf("  Found new initramfs: %s\n", initrdName)
+					u.Output.Logf("  Found new initramfs: %s", initrdName)
 				} else if err == nil && srcInitrd.Size() != dstInitrd.Size() {
 					needsCopy = true
-					fmt.Printf("  Initramfs %s has changed, updating\n", initrdName)
+					u.Output.Logf("  Initramfs %s has changed, updating", initrdName)
 				}
 
 				if needsCopy {
 					if err := copyFile(pattern, destInitrd); err != nil {
 						return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
 					}
-					fmt.Printf("  Installed initramfs: %s\n", initrdName)
+					u.Output.Logf("  Installed initramfs: %s", initrdName)
 					copiedInitramfs = true
 				}
 				break // Only copy the first matching initramfs
@@ -458,7 +462,7 @@ func (u *SystemUpdater) InstallKernelAndInitramfs() error {
 	}
 
 	if !copiedKernel && !copiedInitramfs {
-		fmt.Println("  Kernel and initramfs are up to date")
+		u.Output.Log("  Kernel and initramfs are up to date")
 	}
 
 	return nil
@@ -515,7 +519,7 @@ func (u *SystemUpdater) UpdateBootloader() error {
 
 	// Detect bootloader type
 	bootloaderType := u.detectBootloaderType()
-	fmt.Printf("  Detected bootloader: %s\n", bootloaderType)
+	u.Output.Logf("  Detected bootloader: %s", bootloaderType)
 
 	// Update based on bootloader type
 	switch bootloaderType {
@@ -638,7 +642,7 @@ menuentry '%s (Previous)' {
 		return fmt.Errorf("failed to write grub.cfg: %w", err)
 	}
 
-	fmt.Printf("  Updated GRUB to boot from %s\n", u.Target)
+	u.Output.Logf("  Updated GRUB to boot from %s", u.Target)
 	return nil
 }
 
@@ -720,14 +724,14 @@ options root=UUID=%s ro
 		return fmt.Errorf("failed to write rollback boot entry: %w", err)
 	}
 
-	fmt.Printf("  Updated systemd-boot to boot from %s\n", u.Target)
+	u.Output.Logf("  Updated systemd-boot to boot from %s", u.Target)
 	return nil
 }
 
 // PerformUpdate performs the complete update workflow
 func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 	// Check prerequisites
-	fmt.Println("Checking prerequisites...")
+	u.Output.Log("Checking prerequisites...")
 	if err := CheckPodmanAvailable(); err != nil {
 		return err
 	}
@@ -746,6 +750,7 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 
 	// Confirm update
 	if !u.Config.DryRun && !u.Config.Force {
+		// Interactive prompts always go to stdout for user interaction
 		fmt.Printf("\n%s\n", strings.Repeat("=", 60))
 		fmt.Printf("This will update the system to a new root filesystem.\n")
 		fmt.Printf("Target partition: %s\n", u.Target)
@@ -767,7 +772,7 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 	// Update system config with new image reference
 	if !u.Config.DryRun {
 		if err := UpdateSystemConfigImageRef(u.Config.ImageRef, u.Config.DryRun); err != nil {
-			fmt.Printf("Warning: failed to update system config: %v\n", err)
+			u.Output.Warning(fmt.Sprintf("Failed to update system config: %v", err))
 		}
 	}
 

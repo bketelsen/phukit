@@ -51,6 +51,10 @@ func init() {
 func runUpdate(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	dryRun := viper.GetBool("dry-run")
+	outputFormat := viper.GetString("output")
+
+	// Create output writer
+	output := pkg.NewOutputWriter(pkg.OutputFormat(outputFormat), cmd.OutOrStdout(), verbose)
 
 	var device string
 	var err error
@@ -62,7 +66,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("invalid device: %w", err)
 		}
 		if verbose {
-			fmt.Printf("Using specified device: %s\n", device)
+			output.Logf("Using specified device: %s", device)
 		}
 	} else {
 		// Auto-detect boot device
@@ -71,7 +75,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to auto-detect boot device: %w (use --device to specify manually)", err)
 		}
 		if !verbose {
-			fmt.Printf("Auto-detected boot device: %s\n", device)
+			output.Logf("Auto-detected boot device: %s", device)
 		}
 	}
 
@@ -83,13 +87,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("no image specified and failed to read system config: %w", err)
 		}
 		imageRef = config.ImageRef
-		fmt.Printf("Using image from system config: %s\n", imageRef)
+		output.Logf("Using image from system config: %s", imageRef)
 	}
 
 	// Create updater
 	updater := pkg.NewSystemUpdater(device, imageRef)
 	updater.SetVerbose(verbose)
 	updater.SetDryRun(dryRun)
+	updater.SetOutput(output)
 
 	// Add kernel arguments
 	for _, arg := range updateKernelArgs {
@@ -102,12 +107,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if !dryRun {
-		fmt.Println()
-		fmt.Println("=================================================================")
-		fmt.Println("System update complete!")
-		fmt.Println("Reboot your system to activate the new version.")
-		fmt.Println("The previous version is available in the boot menu for rollback.")
-		fmt.Println("=================================================================")
+		output.Log("")
+		output.Log("System update complete! Reboot to activate the new version.")
+		output.Log("Previous version available in boot menu for rollback.")
 	}
 
 	return nil

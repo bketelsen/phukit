@@ -98,13 +98,14 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 - ✅ **Validation**: Verify disks are suitable for installation
 - 🚀 **Automated Installation**: Complete installation workflow with safety checks
 - 🔄 **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
-- � **UAPI Compliance**: Follows Boot Loader Specification for standard-compliant boot management
-- �🔧 **Kernel Arguments**: Support for custom kernel arguments
+- 📋 **UAPI Compliance**: Follows Boot Loader Specification for standard-compliant boot management
+- 🔧 **Kernel Arguments**: Support for custom kernel arguments
 - 💾 **/etc Persistence**: Three-way merge preserves user configuration across updates
 - 🏷️ **Multiple Device Types**: Supports SATA (sd\*), NVMe (nvme\*), virtio (vd\*), and MMC devices
 - 🛡️ **Safety Features**: Confirmation prompts and force flag for automation
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
 - 🔐 **Configuration Storage**: Stores image reference for easy updates
+- 📊 **Machine-Readable Output**: JSON output format for GUI installers and automation (use `--output json`)
 
 ## Prerequisites
 
@@ -272,7 +273,13 @@ phukit install --image IMAGE --device DEVICE -v
 
 # Dry run mode (no actual changes)
 phukit install --image IMAGE --device DEVICE --dry-run
+
+# JSON output for automation/GUI installers
+phukit install --image IMAGE --device DEVICE --output json
+phukit update --output json
 ```
+
+See [docs/JSON-OUTPUT.md](docs/JSON-OUTPUT.md) for details on the machine-readable JSON output format.
 
 ## How It Works
 

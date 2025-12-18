@@ -52,6 +52,16 @@ func init() {
 func runInstall(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	dryRun := viper.GetBool("dry-run")
+	outputFormat := viper.GetString("output")
+
+	// Create output writer
+	var format pkg.OutputFormat
+	if outputFormat == "json" {
+		format = pkg.OutputFormatJSON
+	} else {
+		format = pkg.OutputFormatText
+	}
+	output := pkg.NewOutputWriter(format, nil, verbose)
 
 	// Resolve device path
 	device, err := pkg.GetDiskByPath(installDevice)
@@ -59,14 +69,15 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid device: %w", err)
 	}
 
-	if verbose {
-		fmt.Printf("Resolved device: %s\n", device)
+	if verbose && !output.IsJSON() {
+		output.Log(fmt.Sprintf("Resolved device: %s", device))
 	}
 
 	// Create installer
 	installer := pkg.NewBootcInstaller(installImage, device)
 	installer.SetVerbose(verbose)
 	installer.SetDryRun(dryRun)
+	installer.SetOutput(output)
 
 	// Add kernel arguments
 	for _, arg := range installKernelArgs {
@@ -78,12 +89,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if !dryRun {
-		fmt.Println()
-		fmt.Println("=================================================================")
-		fmt.Println("Installation complete! You can now boot from this disk.")
-		fmt.Println("Make sure to configure your system's boot order if needed.")
-		fmt.Println("=================================================================")
+	if !dryRun && !output.IsJSON() {
+		output.Log("")
+		output.Log("=================================================================")
+		output.Log("Installation complete! You can now boot from this disk.")
+		output.Log("Make sure to configure your system's boot order if needed.")
+		output.Log("=================================================================")
 	}
 
 	return nil

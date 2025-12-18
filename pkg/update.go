@@ -696,15 +696,6 @@ func (u *SystemUpdater) updateSystemdBootBootloader() error {
 
 	// Update loader.conf to default to bootc entry
 	loaderDir := filepath.Join(u.Config.BootMountPoint, "efi", "loader")
-	loaderConf := `default bootc
-timeout 5
-console-mode max
-editor yes
-`
-	loaderConfPath := filepath.Join(loaderDir, "loader.conf")
-	if err := os.WriteFile(loaderConfPath, []byte(loaderConf), 0644); err != nil {
-		return fmt.Errorf("failed to write loader.conf: %w", err)
-	}
 
 	// Create/update main boot entry (always points to newest system)
 	entriesDir := filepath.Join(loaderDir, "entries")

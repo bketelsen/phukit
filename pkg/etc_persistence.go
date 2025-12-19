@@ -39,12 +39,15 @@ func InstallEtcMountUnit(targetDir string, dryRun bool) error {
 	}
 
 	// Create the systemd mount unit
+	// Note: etc.mount is a special name that systemd auto-generates for /etc
+	// We need to use a different approach - use a .mount unit with escaped path
 	mountUnitContent := `[Unit]
 Description=Bind mount /var/etc to /etc for persistence
 DefaultDependencies=no
-Before=local-fs.target
-After=var.mount
+After=var.mount local-fs-pre.target
 Requires=var.mount
+Before=local-fs.target sysinit.target
+ConditionPathExists=/var/etc
 
 [Mount]
 What=/var/etc
@@ -76,8 +79,21 @@ WantedBy=local-fs.target
 	symlinkPath := filepath.Join(wantsDir, "etc.mount")
 	// Remove existing symlink if present
 	_ = os.Remove(symlinkPath)
-	if err := os.Symlink("/usr/lib/systemd/system/etc.mount", symlinkPath); err != nil {
+	// Use relative symlink so it works after boot
+	if err := os.Symlink("../etc.mount", symlinkPath); err != nil {
 		return fmt.Errorf("failed to enable etc.mount unit: %w", err)
+	}
+
+	// Also enable in sysinit.target.wants for earlier activation
+	sysinitWantsDir := filepath.Join(systemdDir, "sysinit.target.wants")
+	if err := os.MkdirAll(sysinitWantsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create sysinit.target.wants directory: %w", err)
+	}
+
+	sysinitSymlinkPath := filepath.Join(sysinitWantsDir, "etc.mount")
+	_ = os.Remove(sysinitSymlinkPath)
+	if err := os.Symlink("../etc.mount", sysinitSymlinkPath); err != nil {
+		return fmt.Errorf("failed to enable etc.mount in sysinit.target: %w", err)
 	}
 
 	fmt.Println("  /etc persistence mount unit installed")

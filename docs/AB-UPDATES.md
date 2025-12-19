@@ -23,27 +23,40 @@ The `phukit update` command implements an A/B (dual root) update system that ena
    - Reads `/proc/cmdline` to determine which root partition is currently booted
    - Identifies the inactive partition as the update target
 
-2. **Pull New Image**
+2. **Check If Update Needed**
+
+   - Compares installed image digest with remote image digest
+   - Skips update if digests match (system is up-to-date)
+   - Use `--force` to reinstall even if up-to-date
+
+3. **Pull New Image**
 
    - Downloads the latest container image using go-containerregistry
 
-3. **Extract to Inactive Partition**
+4. **Extract to Inactive Partition**
 
    - Mounts the inactive root partition
    - Clears existing content
    - Extracts new container filesystem
 
-4. **Update Bootloader**
+5. **Update Bootloader**
 
    - Updates GRUB configuration to boot from the new partition
    - Sets new partition as default boot option
    - Keeps old partition as fallback in boot menu
 
-5. **Reboot to Activate**
+6. **Reboot to Activate**
    - Next boot uses the updated partition
    - Previous partition remains available for rollback
 
 ## Usage
+
+### Check for Updates
+
+```bash
+# Check if an update is available without installing
+sudo phukit update --check
+```
 
 ### Basic Update
 

@@ -179,9 +179,19 @@ func (b *BootcInstaller) Install() error {
 		return fmt.Errorf("failed to save pristine /etc: %w", err)
 	}
 
+	// Get image digest for tracking updates
+	imageDigest, err := GetRemoteImageDigest(b.ImageRef)
+	if err != nil {
+		fmt.Printf("  Warning: could not get image digest: %v\n", err)
+		imageDigest = "" // Continue without digest
+	} else if b.Verbose {
+		fmt.Printf("  Image digest: %s\n", imageDigest)
+	}
+
 	// Write system configuration
 	config := &SystemConfig{
 		ImageRef:       b.ImageRef,
+		ImageDigest:    imageDigest,
 		Device:         b.Device,
 		InstallDate:    time.Now().Format(time.RFC3339),
 		KernelArgs:     b.KernelArgs,

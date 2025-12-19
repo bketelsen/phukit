@@ -17,6 +17,7 @@ const (
 // SystemConfig represents the system configuration stored in /etc/phukit/
 type SystemConfig struct {
 	ImageRef       string   `json:"image_ref"`       // Container image reference
+	ImageDigest    string   `json:"image_digest"`    // Container image digest (sha256:...)
 	Device         string   `json:"device"`          // Installation device
 	InstallDate    string   `json:"install_date"`    // Installation timestamp
 	KernelArgs     []string `json:"kernel_args"`     // Custom kernel arguments
@@ -98,10 +99,10 @@ func WriteSystemConfigToTarget(targetDir string, config *SystemConfig, dryRun bo
 	return nil
 }
 
-// UpdateSystemConfigImageRef updates the image reference in the system config
-func UpdateSystemConfigImageRef(imageRef string, dryRun bool) error {
+// UpdateSystemConfigImageRef updates the image reference and digest in the system config
+func UpdateSystemConfigImageRef(imageRef, imageDigest string, dryRun bool) error {
 	if dryRun {
-		fmt.Printf("[DRY RUN] Would update config with image: %s\n", imageRef)
+		fmt.Printf("[DRY RUN] Would update config with image: %s (digest: %s)\n", imageRef, imageDigest)
 		return nil
 	}
 
@@ -111,8 +112,9 @@ func UpdateSystemConfigImageRef(imageRef string, dryRun bool) error {
 		return err
 	}
 
-	// Update image reference
+	// Update image reference and digest
 	config.ImageRef = imageRef
+	config.ImageDigest = imageDigest
 
 	// Write back
 	data, err := json.MarshalIndent(config, "", "  ")
@@ -125,5 +127,8 @@ func UpdateSystemConfigImageRef(imageRef string, dryRun bool) error {
 	}
 
 	fmt.Printf("  Updated system configuration with new image: %s\n", imageRef)
+	if imageDigest != "" {
+		fmt.Printf("  Digest: %s\n", imageDigest)
+	}
 	return nil
 }

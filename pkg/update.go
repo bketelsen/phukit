@@ -12,6 +12,33 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
+// GetRemoteImageDigest fetches the digest of a remote container image without downloading layers.
+// Returns the digest in the format "sha256:..."
+func GetRemoteImageDigest(imageRef string) (string, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return "", fmt.Errorf("invalid image reference: %w", err)
+	}
+
+	// Get the image descriptor (manifest digest) without downloading layers
+	desc, err := remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return "", fmt.Errorf("failed to get image descriptor: %w", err)
+	}
+
+	return desc.Digest.String(), nil
+}
+
+// CheckUpdateNeeded compares the installed image digest with the remote image digest
+// Returns true if an update is needed (digests differ), false otherwise
+func CheckUpdateNeeded(installedDigest, remoteDigest string) bool {
+	if installedDigest == "" {
+		// No digest stored (old installation), assume update needed
+		return true
+	}
+	return installedDigest != remoteDigest
+}
+
 // GetActiveRootPartition determines which root partition is currently active
 func GetActiveRootPartition() (string, error) {
 	// Read /proc/cmdline to see which root is being used
@@ -118,6 +145,7 @@ func DetectExistingPartitionScheme(device string) (*PartitionScheme, error) {
 type UpdaterConfig struct {
 	Device         string
 	ImageRef       string
+	ImageDigest    string // Digest of the remote image (set by IsUpdateNeeded)
 	Verbose        bool
 	DryRun         bool
 	Force          bool // Skip interactive confirmation
@@ -224,6 +252,53 @@ func (u *SystemUpdater) PullImage() error {
 
 	fmt.Println("  Image reference is valid and accessible")
 	return nil
+}
+
+// IsUpdateNeeded checks if the remote image differs from the currently installed image.
+// Returns true if an update is needed, false if the system is already up-to-date.
+// Also returns the remote digest for use during the update process.
+func (u *SystemUpdater) IsUpdateNeeded() (bool, string, error) {
+	fmt.Println("Checking if update is needed...")
+
+	// Get the remote image digest
+	remoteDigest, err := GetRemoteImageDigest(u.Config.ImageRef)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to get remote image digest: %w", err)
+	}
+
+	if u.Config.Verbose {
+		fmt.Printf("  Remote image digest: %s\n", remoteDigest)
+	}
+
+	// Read the current system config to get installed digest
+	config, err := ReadSystemConfig()
+	if err != nil {
+		// If we can't read config, assume update is needed
+		fmt.Printf("  Could not read system config: %v\n", err)
+		fmt.Println("  Assuming update is needed")
+		return true, remoteDigest, nil
+	}
+
+	if u.Config.Verbose {
+		fmt.Printf("  Installed image: %s\n", config.ImageRef)
+		fmt.Printf("  Installed digest: %s\n", config.ImageDigest)
+	}
+
+	if config.ImageDigest == "" {
+		fmt.Println("  No digest stored (older installation), update needed")
+		return true, remoteDigest, nil
+	}
+
+	if config.ImageDigest == remoteDigest {
+		fmt.Println("  ✓ System is already up-to-date")
+		fmt.Printf("    Installed: %s\n", config.ImageDigest)
+		return false, remoteDigest, nil
+	}
+
+	fmt.Println("  Update available:")
+	fmt.Printf("    Installed: %s\n", config.ImageDigest)
+	fmt.Printf("    Available: %s\n", remoteDigest)
+	return true, remoteDigest, nil
 }
 
 // Update performs the system update
@@ -738,6 +813,22 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 		}
 	}
 
+	// Check if update is actually needed (compare digests)
+	needed, digest, err := u.IsUpdateNeeded()
+	if err != nil {
+		fmt.Printf("Warning: could not check if update needed: %v\n", err)
+		// Continue with update anyway
+	} else if !needed && !u.Config.Force {
+		fmt.Println("\nNo update needed - system is already running the latest version.")
+		fmt.Println("Use --force to reinstall anyway.")
+		return nil
+	} else if !needed && u.Config.Force {
+		fmt.Println("\nSystem is up-to-date, but --force was specified. Proceeding with reinstall...")
+	}
+
+	// Store digest for later use
+	u.Config.ImageDigest = digest
+
 	// Confirm update
 	if !u.Config.DryRun && !u.Config.Force {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 60))
@@ -758,9 +849,9 @@ func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
 		return err
 	}
 
-	// Update system config with new image reference
+	// Update system config with new image reference and digest
 	if !u.Config.DryRun {
-		if err := UpdateSystemConfigImageRef(u.Config.ImageRef, u.Config.DryRun); err != nil {
+		if err := UpdateSystemConfigImageRef(u.Config.ImageRef, u.Config.ImageDigest, u.Config.DryRun); err != nil {
 			fmt.Printf("Warning: failed to update system config: %v\n", err)
 		}
 	}

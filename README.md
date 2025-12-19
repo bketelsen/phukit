@@ -243,6 +243,9 @@ phukit update \
   --image quay.io/my-org/my-image:v2.0 \
   --device /dev/sda
 
+# Check if an update is available (without installing)
+phukit update --check
+
 # Skip pulling (use already pulled image)
 phukit update \
   --image localhost/my-image:latest \
@@ -254,12 +257,17 @@ phukit update \
   --device /dev/sda \
   --force
 
+# Force reinstall even if already up-to-date
+phukit update --force
+
 # Add custom kernel arguments for the new system
 phukit update \
   --device /dev/sda \
   --karg console=ttyS0 \
   --karg debug
 ```
+
+The update command automatically compares the installed image digest with the remote image. If they match, the update is skipped (unless `--force` is used).
 
 After update, reboot to activate the new system. The previous version remains available in the boot menu for rollback.
 
@@ -358,15 +366,18 @@ After installation, `phukit` writes a configuration file to `/etc/phukit/config.
 ```json
 {
   "image_ref": "quay.io/example/bootc-image:latest",
+  "image_digest": "sha256:abc123...",
   "device": "/dev/sda",
   "install_date": "2025-12-16T10:30:00Z",
   "kernel_args": ["console=ttyS0", "quiet"],
-  "bootloader_type": "grub2",
-  "active_partition": "/dev/sda3"
+  "bootloader_type": "grub2"
 }
 ```
 
-This configuration is automatically used during updates, so you don't need to specify the image reference again.
+This configuration is automatically used during updates:
+
+- **image_ref**: Used if no `--image` flag is provided
+- **image_digest**: Compared with remote digest to detect if update is needed
 
 ## Configuration File
 

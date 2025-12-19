@@ -12,6 +12,7 @@ var (
 	updateImage      string
 	updateDevice     string
 	updateSkipPull   bool
+	updateCheckOnly  bool
 	updateKernelArgs []string
 )
 
@@ -23,19 +24,24 @@ var updateCmd = &cobra.Command{
 This command performs an A/B system update:
   1. Auto-detects the boot device (or use --device to override)
   2. Detects which root partition is currently active
-  3. Pulls the new container image (unless --skip-pull is specified)
-  4. Extracts the new filesystem to the inactive root partition
-  5. Updates the bootloader to boot from the new partition
-  6. Keeps the old partition as a rollback option
+  3. Checks if an update is available (compares image digests)
+  4. Pulls the new container image (unless --skip-pull is specified)
+  5. Extracts the new filesystem to the inactive root partition
+  6. Updates the bootloader to boot from the new partition
+  7. Keeps the old partition as a rollback option
+
+Use --check to only check if an update is available without installing.
 
 After update, reboot to activate the new system. The previous system remains
 available in the boot menu for rollback if needed.
 
 Example:
   phukit update
+  phukit update --check              # Just check if update available
   phukit update --image quay.io/example/myimage:v2.0
   phukit update --skip-pull
-  phukit update --device /dev/sda  # Override auto-detection`,
+  phukit update --device /dev/sda    # Override auto-detection
+  phukit update --force              # Reinstall even if up-to-date`,
 	RunE: runUpdate,
 }
 
@@ -45,12 +51,14 @@ func init() {
 	updateCmd.Flags().StringVarP(&updateImage, "image", "i", "", "Container image reference (uses saved config if not specified)")
 	updateCmd.Flags().StringVarP(&updateDevice, "device", "d", "", "Target disk device (auto-detected if not specified)")
 	updateCmd.Flags().BoolVar(&updateSkipPull, "skip-pull", false, "Skip pulling the image (use already pulled image)")
+	updateCmd.Flags().BoolVarP(&updateCheckOnly, "check", "c", false, "Only check if an update is available (don't install)")
 	updateCmd.Flags().StringArrayVarP(&updateKernelArgs, "karg", "k", []string{}, "Kernel argument to pass (can be specified multiple times)")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	dryRun := viper.GetBool("dry-run")
+	force := viper.GetBool("force")
 
 	var device string
 	var err error
@@ -90,6 +98,24 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	updater := pkg.NewSystemUpdater(device, imageRef)
 	updater.SetVerbose(verbose)
 	updater.SetDryRun(dryRun)
+	updater.SetForce(force)
+
+	// If --check flag, only check if update is needed
+	if updateCheckOnly {
+		needed, digest, err := updater.IsUpdateNeeded()
+		if err != nil {
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+		if needed {
+			fmt.Println()
+			fmt.Printf("Update available: %s\n", digest)
+			fmt.Println("Run 'phukit update' to install the update.")
+			// Exit with code 0 (update available)
+			return nil
+		}
+		// System is up-to-date
+		return nil
+	}
 
 	// Add kernel arguments
 	for _, arg := range updateKernelArgs {

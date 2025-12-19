@@ -35,10 +35,6 @@ func TestCreatePartitions(t *testing.T) {
 		t.Fatal("Partition scheme is nil")
 	}
 
-	// Check that partition paths are set
-	if scheme.EFIPartition == "" {
-		t.Error("EFI partition path is empty")
-	}
 	if scheme.BootPartition == "" {
 		t.Error("Boot partition path is empty")
 	}
@@ -53,7 +49,6 @@ func TestCreatePartitions(t *testing.T) {
 	}
 
 	t.Logf("Partition scheme created:")
-	t.Logf("  EFI:   %s", scheme.EFIPartition)
 	t.Logf("  Boot:  %s", scheme.BootPartition)
 	t.Logf("  Root1: %s", scheme.Root1Partition)
 	t.Logf("  Root2: %s", scheme.Root2Partition)
@@ -85,7 +80,6 @@ func TestFormatPartitions(t *testing.T) {
 
 	// Verify UUIDs can be retrieved (means partitions are formatted)
 	for name, part := range map[string]string{
-		"EFI":   scheme.EFIPartition,
 		"Boot":  scheme.BootPartition,
 		"Root1": scheme.Root1Partition,
 		"Root2": scheme.Root2Partition,
@@ -139,10 +133,11 @@ func TestMountPartitions(t *testing.T) {
 	}
 
 	// Verify mount points exist
+	// New 4-partition scheme: boot (ESP), root1, root2, var
+	// /boot is the combined ESP partition (no separate /boot/efi)
 	expectedDirs := []string{
 		mountPoint,
 		filepath.Join(mountPoint, "boot"),
-		filepath.Join(mountPoint, "boot", "efi"),
 		filepath.Join(mountPoint, "var"),
 	}
 
@@ -188,10 +183,6 @@ func TestDetectExistingPartitionScheme(t *testing.T) {
 	}
 
 	// Compare schemes
-	if detectedScheme.EFIPartition != originalScheme.EFIPartition {
-		t.Errorf("EFI partition mismatch: got %s, want %s",
-			detectedScheme.EFIPartition, originalScheme.EFIPartition)
-	}
 	if detectedScheme.BootPartition != originalScheme.BootPartition {
 		t.Errorf("Boot partition mismatch: got %s, want %s",
 			detectedScheme.BootPartition, originalScheme.BootPartition)

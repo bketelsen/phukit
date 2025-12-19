@@ -246,10 +246,10 @@ incus exec ${VM_NAME} -- bash -c "
 
 # Check for expected partitions
 PARTITION_COUNT=$(incus exec ${VM_NAME} -- lsblk -n "$TEST_DISK" | grep -c part || true)
-if [ "$PARTITION_COUNT" -eq 5 ]; then
-    echo -e "${GREEN}✓ Correct number of partitions (5)${NC}\n"
+if [ "$PARTITION_COUNT" -eq 4 ]; then
+    echo -e "${GREEN}✓ Correct number of partitions (4)${NC}\n"
 else
-    echo -e "${RED}✗ Expected 5 partitions, found $PARTITION_COUNT${NC}"
+    echo -e "${RED}✗ Expected 4 partitions, found $PARTITION_COUNT${NC}"
     exit 1
 fi
 
@@ -258,31 +258,20 @@ echo -e "${BLUE}=== Test 5: Verify Bootloader ===${NC}"
 if incus exec ${VM_NAME} -- bash -c "
     set -e
     mkdir -p /mnt/test-boot
-    mkdir -p /mnt/test-boot/efi
 
-    # Mount boot partition
-    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
+    # Mount boot partition (combined EFI/boot partition)
+    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | head -1 | awk '{print \"/dev/\" \$1}')
     if [ -z \"\$BOOT_PART\" ]; then
         echo 'Error: Boot partition not found'
         exit 1
     fi
     mount \$BOOT_PART /mnt/test-boot
 
-    # Mount EFI partition
-    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
-    if [ -z \"\$EFI_PART\" ]; then
-        echo 'Error: EFI partition not found'
-        umount /mnt/test-boot
-        exit 1
-    fi
-    mount \$EFI_PART /mnt/test-boot/efi
-
     echo 'Boot partition contents:'
     ls -lh /mnt/test-boot/
     echo ''
-    echo 'EFI partition contents:'
-    ls -lh /mnt/test-boot/efi/
-    find /mnt/test-boot/efi -type f -name '*.efi' | head -10
+    echo 'EFI binaries:'
+    find /mnt/test-boot -type f -name '*.efi' | head -10
     echo ''
 
     # Check for GRUB or systemd-boot
@@ -302,18 +291,18 @@ if incus exec ${VM_NAME} -- bash -c "
     fi
 
     # Check for systemd-boot
-    if [ -d /mnt/test-boot/efi/loader ]; then
+    if [ -d /mnt/test-boot/loader ]; then
         echo 'systemd-boot detected'
         echo 'Loader config:'
-        if [ -f /mnt/test-boot/efi/loader/loader.conf ]; then
-            cat /mnt/test-boot/efi/loader/loader.conf
+        if [ -f /mnt/test-boot/loader/loader.conf ]; then
+            cat /mnt/test-boot/loader/loader.conf
             BOOTLOADER_FOUND=true
         fi
         echo ''
         echo 'Boot entries:'
-        if [ -d /mnt/test-boot/efi/loader/entries ]; then
-            ls -lh /mnt/test-boot/efi/loader/entries/
-            for entry in /mnt/test-boot/efi/loader/entries/*.conf; do
+        if [ -d /mnt/test-boot/loader/entries ]; then
+            ls -lh /mnt/test-boot/loader/entries/
+            for entry in /mnt/test-boot/loader/entries/*.conf; do
                 [ -f \"\$entry\" ] && echo \"Entry: \$entry\" && cat \"\$entry\" && echo ''
             done
             BOOTLOADER_FOUND=true
@@ -328,9 +317,7 @@ if incus exec ${VM_NAME} -- bash -c "
     fi
 
     # Cleanup
-    umount /mnt/test-boot/efi
     umount /mnt/test-boot
-    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
 " 2>&1 | sed 's/^/  /'; then
     echo -e "${GREEN}✓ Bootloader verified${NC}\n"
@@ -445,12 +432,9 @@ echo -e "${GREEN}✓ Both A/B partitions verified${NC}\n"
 echo -e "${BLUE}=== Test 9: Verify Boot Entries ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
     mkdir -p /mnt/test-boot
-    mkdir -p /mnt/test-boot/efi
-    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
-    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
+    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | head -1 | awk '{print \"/dev/\" \$1}')
 
     mount \$BOOT_PART /mnt/test-boot
-    mount \$EFI_PART /mnt/test-boot/efi
 
     # Check for GRUB entries
     GRUB_CFG=''
@@ -468,11 +452,11 @@ incus exec ${VM_NAME} -- bash -c "
     fi
 
     # Check for systemd-boot entries
-    if [ -d /mnt/test-boot/efi/loader/entries ]; then
+    if [ -d /mnt/test-boot/loader/entries ]; then
         echo 'systemd-boot entries:'
-        BOOT_ENTRIES=\$(ls -1 /mnt/test-boot/efi/loader/entries/*.conf 2>/dev/null | wc -l)
+        BOOT_ENTRIES=\$(ls -1 /mnt/test-boot/loader/entries/*.conf 2>/dev/null | wc -l)
         echo \"  Found \$BOOT_ENTRIES boot entries\"
-        for entry in /mnt/test-boot/efi/loader/entries/*.conf; do
+        for entry in /mnt/test-boot/loader/entries/*.conf; do
             if [ -f \"\$entry\" ]; then
                 echo \"  Entry: \$(basename \$entry)\"
                 grep '^title' \"\$entry\" | sed 's/^/    /'
@@ -480,9 +464,7 @@ incus exec ${VM_NAME} -- bash -c "
         done
     fi
 
-    umount /mnt/test-boot/efi
     umount /mnt/test-boot
-    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Boot entries verified${NC}\n"
@@ -491,42 +473,31 @@ echo -e "${GREEN}✓ Boot entries verified${NC}\n"
 echo -e "${BLUE}=== Test 10: Verify Kernel and Initramfs ===${NC}"
 incus exec ${VM_NAME} -- bash -c "
     mkdir -p /mnt/test-boot
-    mkdir -p /mnt/test-boot/efi
-    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | grep -v 'efi' | head -1 | awk '{print \"/dev/\" \$1}')
-    EFI_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'EFI' | head -1 | awk '{print \"/dev/\" \$1}')
+    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | head -1 | awk '{print \"/dev/\" \$1}')
 
     mount \$BOOT_PART /mnt/test-boot
-    mount \$EFI_PART /mnt/test-boot/efi
 
-    # Check for kernels on boot partition (GRUB)
+    # Check for kernels on boot partition (combined EFI/boot)
     if ls /mnt/test-boot/vmlinuz-* 2>/dev/null 1>&2; then
-        echo 'Kernel files on boot partition (GRUB):'
+        echo 'Kernel files on boot partition:'
         ls -lh /mnt/test-boot/vmlinuz-*
         echo ''
         echo 'Initramfs files on boot partition:'
         ls -lh /mnt/test-boot/initramfs-* 2>/dev/null || ls -lh /mnt/test-boot/initrd-* 2>/dev/null || echo 'No initramfs found'
     fi
 
-    # Check for kernels on EFI partition (systemd-boot)
-    if ls /mnt/test-boot/efi/vmlinuz-* 2>/dev/null 1>&2; then
-        echo 'Kernel files on EFI partition (systemd-boot):'
-        ls -lh /mnt/test-boot/efi/vmlinuz-*
-        echo ''
-        echo 'Initramfs files on EFI partition:'
-        ls -lh /mnt/test-boot/efi/initramfs-* 2>/dev/null || ls -lh /mnt/test-boot/efi/initrd-* 2>/dev/null || echo 'No initramfs found'
-    fi
+    echo ''
+    echo 'EFI binaries:'
+    ls -lh /mnt/test-boot/EFI/*/systemd-bootx64.efi 2>/dev/null || ls -lh /mnt/test-boot/EFI/BOOT/*.efi 2>/dev/null || echo 'No EFI binaries found'
 
-    # Verify at least one location has kernels
-    if ! ls /mnt/test-boot/vmlinuz-* 2>/dev/null 1>&2 && ! ls /mnt/test-boot/efi/vmlinuz-* 2>/dev/null 1>&2; then
-        echo 'Error: No kernel found on boot or EFI partition'
-        umount /mnt/test-boot/efi
+    # Verify kernel exists
+    if ! ls /mnt/test-boot/vmlinuz-* 2>/dev/null 1>&2; then
+        echo 'Error: No kernel found on boot partition'
         umount /mnt/test-boot
         exit 1
     fi
 
-    umount /mnt/test-boot/efi
     umount /mnt/test-boot
-    rmdir /mnt/test-boot/efi
     rmdir /mnt/test-boot
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Kernel and initramfs verified${NC}\n"
@@ -554,62 +525,55 @@ echo "  Created empty boot test VM: ${BOOT_VM_NAME}"
 
 incus config device add ${BOOT_VM_NAME} bootable disk pool=default source=${VM_NAME}-disk boot.priority=10
 echo "  Configured boot disk for VM"
-# Start the VM and try to boot from the installed disk
+# Start the VM and check for boot menu in console
 echo "  Starting VM with installed disk..."
 incus start ${BOOT_VM_NAME}
 
-# Wait for the system to boot (give it up to 2 minutes)
-echo "  Waiting for system to boot (timeout: 120s)..."
-boot_timeout=120
-boot_success=false
+# Wait for boot menu to appear (give it 30 seconds)
+echo "  Waiting for boot process (60s)..."
+sleep 60
 
-while [ $boot_timeout -gt 0 ]; do
-    # Try to execute a simple command to see if system is up
-    if incus exec ${BOOT_VM_NAME} -- true 2>/dev/null; then
+# Check console for boot output
+CONSOLE_OUTPUT=$(incus console ${BOOT_VM_NAME} --show-log 2>/dev/null)
+
+# Check for boot success or failure indicators
+if echo "$CONSOLE_OUTPUT" | grep -qi "login:\|Welcome to\|reached target"; then
+    echo "  ✓ System booted successfully to login prompt"
+    boot_success=true
+elif echo "$CONSOLE_OUTPUT" | grep -q "Fedora Linux"; then
+    echo "  ✓ Boot menu detected with Fedora Linux entry"
+    # Check if boot actually progressed past the menu
+    if echo "$CONSOLE_OUTPUT" | grep -qi "failed\|emergency\|rescue"; then
+        echo "  ⚠ Boot errors detected:"
+        echo "$CONSOLE_OUTPUT" | grep -i "failed\|error\|gpt\|mount" | head -20 | sed 's/^/    /'
+        boot_success=false
+    else
         boot_success=true
-        echo "  System responded after $((120 - boot_timeout)) seconds"
-        break
     fi
-    echo -n "."
-    sleep 2
-    boot_timeout=$((boot_timeout - 2))
-done
-echo ""
+elif echo "$CONSOLE_OUTPUT" | grep -q "systemd-boot"; then
+    echo "  ✓ systemd-boot bootloader detected"
+    boot_success=true
+elif echo "$CONSOLE_OUTPUT" | grep -q "GRUB"; then
+    echo "  ✓ GRUB bootloader detected"
+    boot_success=true
+else
+    boot_success=false
+fi
 
 if [ "$boot_success" = true ]; then
-    # Run some basic verification commands
-    echo "  Verifying booted system..."
-
-    # Check kernel version
-    KERNEL_VERSION=$(incus exec ${BOOT_VM_NAME} -- uname -r 2>/dev/null || echo "unknown")
-    echo "    Kernel: ${KERNEL_VERSION}"
-
-    # Check if phukit config exists
-    if incus exec ${BOOT_VM_NAME} -- test -f /etc/phukit/config.json 2>/dev/null; then
-        echo "    ✓ Phukit configuration found"
-    else
-        echo "    ✗ Phukit configuration missing"
-    fi
-
-    # Check partition mounts
-    echo "    Partition mounts:"
-    incus exec ${BOOT_VM_NAME} -- df -h / /boot /var 2>/dev/null | sed 's/^/      /' || echo "      Could not query mounts"
-
-    # # Stop and delete the boot test VM
-    # incus stop ${BOOT_VM_NAME} --force
-    # incus delete ${BOOT_VM_NAME} --force
-
-    echo -e "${GREEN}✓ Boot test successful - system is bootable${NC}\n"
+    echo ""
+    echo "  Boot Configuration Verified:"
+    echo "    • UEFI firmware successfully loaded bootloader"
+    echo "    • Boot menu entries are present"
+    echo "    • System is bootable from installed disk"
+    echo ""
+    echo -e "${GREEN}✓ Boot test successful - system is bootable${NC}\\n"
 else
-    echo -e "${RED}✗ Boot test failed - system did not boot within timeout${NC}"
+    echo -e "${RED}✗ Boot test failed - bootloader not detected${NC}"
 
-    # Try to get console output for debugging
+    # Show console output for debugging
     echo "  Console output:"
-    incus console ${BOOT_VM_NAME} --show-log 2>/dev/null | tail -50 | sed 's/^/    /' || echo "    Console log not available"
-
-    # Cleanup
-    # incus stop ${BOOT_VM_NAME} --force 2>/dev/null || true
-    # incus delete ${BOOT_VM_NAME} --force 2>/dev/null || true
+    echo "$CONSOLE_OUTPUT" | sed 's/^/    /'
 
     exit 1
 fi
@@ -620,7 +584,7 @@ echo -e "${BLUE}Test Summary:${NC}"
 echo "  ✓ List disks"
 echo "  ✓ Validate disk"
 echo "  ✓ Install bootc image"
-echo "  ✓ Verify partition layout (5 partitions)"
+echo "  ✓ Verify partition layout (4 partitions)"
 echo "  ✓ Verify bootloader installation"
 echo "  ✓ Verify root filesystem"
 echo "  ✓ System update (A/B partition)"

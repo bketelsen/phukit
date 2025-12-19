@@ -10,8 +10,7 @@ import (
 
 // PartitionScheme defines the disk partitioning layout
 type PartitionScheme struct {
-	EFIPartition   string // EFI System Partition
-	BootPartition  string // /boot partition
+	BootPartition  string // Boot partition (EFI System Partition, FAT32, 2GB) - holds EFI binaries + kernel/initramfs
 	Root1Partition string // First root filesystem partition (12GB)
 	Root2Partition string // Second root filesystem partition (12GB)
 	VarPartition   string // /var partition (remaining space)
@@ -23,41 +22,36 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 		fmt.Printf("[DRY RUN] Would create partitions on %s\n", device)
 		deviceBase := filepath.Base(device)
 		return &PartitionScheme{
-			EFIPartition:   "/dev/" + deviceBase + "1",
-			BootPartition:  "/dev/" + deviceBase + "2",
-			Root1Partition: "/dev/" + deviceBase + "3",
-			Root2Partition: "/dev/" + deviceBase + "4",
-			VarPartition:   "/dev/" + deviceBase + "5",
+			BootPartition:  "/dev/" + deviceBase + "1",
+			Root1Partition: "/dev/" + deviceBase + "2",
+			Root2Partition: "/dev/" + deviceBase + "3",
+			VarPartition:   "/dev/" + deviceBase + "4",
 		}, nil
 	}
 
 	fmt.Println("Creating GPT partition table...")
 
 	// Use sgdisk to create partitions
-	// Partition 1: EFI System Partition (2GB)
-	// Partition 2: /boot partition (1GB)
-	// Partition 3: First root filesystem (12GB)
-	// Partition 4: Second root filesystem (12GB)
-	// Partition 5: /var partition (remaining space)
+	// Partition 1: Boot/EFI System Partition (2GB, FAT32) - holds EFI binaries + kernel/initramfs
+	// Partition 2: First root filesystem (12GB)
+	// Partition 3: Second root filesystem (12GB)
+	// Partition 4: /var partition (remaining space)
 
 	commands := [][]string{
 		// Create GPT partition table
 		{"sgdisk", "--clear", device},
-		// Create EFI partition (2GB, type EF00 = c12a7328-f81f-11d2-ba4b-00a0c93ec93b)
-		// Auto-mounted to /efi or /boot by systemd-gpt-auto-generator
-		{"sgdisk", "--new=1:0:+2G", "--typecode=1:EF00", "--change-name=1:EFI", device},
-		// Create boot partition (1GB, type bc13c2ff-59e6-4262-a352-b275fd6f7172 = XBOOTLDR)
-		// Auto-mounted to /boot by systemd-gpt-auto-generator
-		{"sgdisk", "--new=2:0:+1G", "--typecode=2:bc13c2ff-59e6-4262-a352-b275fd6f7172", "--change-name=2:boot", device},
+		// Create boot/EFI partition (2GB, type EF00 = EFI System Partition)
+		// This single partition serves as both ESP and boot - holds EFI binaries + kernel/initramfs
+		{"sgdisk", "--new=1:0:+2G", "--typecode=1:EF00", "--change-name=1:boot", device},
 		// Create first root partition (12GB, type 8300 = generic Linux data)
 		// NOT using discoverable root partition type - root specified via kernel cmdline
-		{"sgdisk", "--new=3:0:+12G", "--typecode=3:8300", "--change-name=3:root1", device},
+		{"sgdisk", "--new=2:0:+12G", "--typecode=2:8300", "--change-name=2:root1", device},
 		// Create second root partition (12GB, type 8300 = generic Linux data)
 		// NOT using discoverable root partition type - allows A/B updates with explicit control
-		{"sgdisk", "--new=4:0:+12G", "--typecode=4:8300", "--change-name=4:root2", device},
+		{"sgdisk", "--new=3:0:+12G", "--typecode=3:8300", "--change-name=3:root2", device},
 		// Create /var partition (remaining space, type 8300 = generic Linux data)
 		// NOT using auto-discoverable var type (4d21b016...) - would require machine-id binding
-		{"sgdisk", "--new=5:0:0", "--typecode=5:8300", "--change-name=5:var", device},
+		{"sgdisk", "--new=4:0:0", "--typecode=4:8300", "--change-name=4:var", device},
 	}
 
 	for _, cmdArgs := range commands {
@@ -85,34 +79,29 @@ func CreatePartitions(device string, dryRun bool) (*PartitionScheme, error) {
 	}
 
 	// Determine partition device names
-	var part1, part2, part3, part4, part5 string
-
 	// Handle different device naming conventions
 	// nvme, mmcblk, and loop devices use "p" prefix for partitions
+	var part1, part2, part3, part4 string
 	if strings.HasPrefix(deviceBase, "nvme") || strings.HasPrefix(deviceBase, "mmcblk") || strings.HasPrefix(deviceBase, "loop") {
 		part1 = device + "p1"
 		part2 = device + "p2"
 		part3 = device + "p3"
 		part4 = device + "p4"
-		part5 = device + "p5"
 	} else {
 		part1 = device + "1"
 		part2 = device + "2"
 		part3 = device + "3"
 		part4 = device + "4"
-		part5 = device + "5"
 	}
 
 	scheme := &PartitionScheme{
-		EFIPartition:   part1,
-		BootPartition:  part2,
-		Root1Partition: part3,
-		Root2Partition: part4,
-		VarPartition:   part5,
+		BootPartition:  part1,
+		Root1Partition: part2,
+		Root2Partition: part3,
+		VarPartition:   part4,
 	}
 
 	fmt.Printf("Created partitions:\n")
-	fmt.Printf("  EFI:   %s\n", scheme.EFIPartition)
 	fmt.Printf("  Boot:  %s\n", scheme.BootPartition)
 	fmt.Printf("  Root1: %s\n", scheme.Root1Partition)
 	fmt.Printf("  Root2: %s\n", scheme.Root2Partition)
@@ -130,16 +119,9 @@ func FormatPartitions(scheme *PartitionScheme, dryRun bool) error {
 
 	fmt.Println("Formatting partitions...")
 
-	// Format EFI partition as FAT32
-	fmt.Printf("  Formatting %s as FAT32...\n", scheme.EFIPartition)
-	cmd := exec.Command("mkfs.vfat", "-F", "32", "-n", "EFI", scheme.EFIPartition)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to format EFI partition: %w\nOutput: %s", err, string(output))
-	}
-
-	// Format boot partition as ext4
-	fmt.Printf("  Formatting %s as ext4...\n", scheme.BootPartition)
-	cmd = exec.Command("mkfs.ext4", "-F", "-L", "boot", scheme.BootPartition)
+	// Format boot partition as FAT32 (EFI System Partition)
+	fmt.Printf("  Formatting %s as FAT32 (boot/EFI)...\n", scheme.BootPartition)
+	cmd := exec.Command("mkfs.vfat", "-F", "32", "-n", "UEFI", scheme.BootPartition)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to format boot partition: %w\nOutput: %s", err, string(output))
 	}
@@ -199,22 +181,10 @@ func MountPartitions(scheme *PartitionScheme, mountPoint string, dryRun bool) er
 		return fmt.Errorf("failed to create var directory: %w", err)
 	}
 
-	// Mount boot partition
+	// Mount boot partition (FAT32 EFI System Partition)
 	cmd = exec.Command("mount", scheme.BootPartition, bootDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to mount boot partition: %w\nOutput: %s", err, string(output))
-	}
-
-	// Create EFI directory after mounting boot (so it's on the boot partition)
-	efiDir := filepath.Join(mountPoint, "boot", "efi")
-	if err := os.MkdirAll(efiDir, 0755); err != nil {
-		return fmt.Errorf("failed to create efi directory: %w", err)
-	}
-
-	// Mount EFI partition
-	cmd = exec.Command("mount", scheme.EFIPartition, efiDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w\nOutput: %s", err, string(output))
 	}
 
 	// Mount /var partition
@@ -237,14 +207,8 @@ func UnmountPartitions(mountPoint string, dryRun bool) error {
 	fmt.Println("Unmounting partitions...")
 
 	// Unmount in reverse order
-	efiDir := filepath.Join(mountPoint, "boot", "efi")
 	bootDir := filepath.Join(mountPoint, "boot")
 	varDir := filepath.Join(mountPoint, "var")
-
-	// Unmount EFI
-	if err := exec.Command("umount", efiDir).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to unmount EFI: %v\n", err)
-	}
 
 	// Unmount boot
 	if err := exec.Command("umount", bootDir).Run(); err != nil {

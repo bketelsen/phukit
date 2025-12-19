@@ -56,7 +56,6 @@ func TestBootcInstaller_Install(t *testing.T) {
 		name string
 		path string
 	}{
-		{"EFI", scheme.EFIPartition},
 		{"Boot", scheme.BootPartition},
 		{"Root1", scheme.Root1Partition},
 		{"Root2", scheme.Root2Partition},

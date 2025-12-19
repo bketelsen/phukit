@@ -219,6 +219,8 @@ func createUpdatedMockContainer(t *testing.T, imageName string) error {
 	// Create basic directory structure
 	dirs := []string{
 		"etc", "var", "boot", "usr/bin", "usr/lib", "usr/share",
+		"usr/lib/modules/6.6.0-test",
+		"usr/lib/systemd/boot/efi",
 		"dev", "proc", "sys", "tmp", "run", "home", "root",
 	}
 	for _, dir := range dirs {
@@ -230,7 +232,7 @@ func createUpdatedMockContainer(t *testing.T, imageName string) error {
 	// Create /etc files with updated content
 	etcFiles := map[string]string{
 		"etc/hostname":     "updated-container\n",
-		"etc/os-release":   "ID=test\nNAME=\"Updated Test OS\"\nVERSION_ID=2.0\n",
+		"etc/os-release":   "ID=test\nNAME=\"Updated Test OS\"\nVERSION_ID=2.0\nPRETTY_NAME=\"Updated Test OS 2.0\"\n",
 		"etc/passwd":       "root:x:0:0:root:/root:/bin/sh\n",
 		"etc/group":        "root:x:0:\n",
 		"etc/shells":       "/bin/sh\n/bin/bash\n",
@@ -244,10 +246,10 @@ func createUpdatedMockContainer(t *testing.T, imageName string) error {
 		}
 	}
 
-	// Create mock kernel and initramfs in /boot
+	// Create mock kernel and initramfs in /usr/lib/modules (new bootc layout)
 	kernelFiles := map[string]string{
-		"boot/vmlinuz-6.6.0-test":       "MOCK_KERNEL_IMAGE_V2\n",
-		"boot/initramfs-6.6.0-test.img": "MOCK_INITRAMFS_V2\n",
+		"usr/lib/modules/6.6.0-test/vmlinuz":       "MOCK_KERNEL_IMAGE_V2\n",
+		"usr/lib/modules/6.6.0-test/initramfs.img": "MOCK_INITRAMFS_V2\n",
 	}
 
 	for path, content := range kernelFiles {
@@ -255,6 +257,12 @@ func createUpdatedMockContainer(t *testing.T, imageName string) error {
 		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
 			return err
 		}
+	}
+
+	// Create mock systemd-boot EFI binary
+	efiPath := filepath.Join(rootDir, "usr/lib/systemd/boot/efi/systemd-bootx64.efi")
+	if err := os.WriteFile(efiPath, []byte("MOCK_SYSTEMD_BOOT_EFI_V2\n"), 0644); err != nil {
+		return err
 	}
 
 	// Build container

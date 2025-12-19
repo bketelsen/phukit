@@ -117,9 +117,25 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 
 	fmt.Printf("  Found %d modified configuration file(s)\n", len(modifiedFiles))
 
+	// Files that should never be copied from active system (system identity files)
+	skipFiles := map[string]bool{
+		"os-release":  true,
+		"fstab":       true,
+		"mtab":        true,
+		"hostname":    true,
+		"resolv.conf": true,
+		"machine-id":  true,
+	}
+
 	// Copy modified files to new /etc
 	newEtcDir := filepath.Join(targetDir, "etc")
 	for _, relPath := range modifiedFiles {
+		// Skip system identity files
+		baseName := filepath.Base(relPath)
+		if skipFiles[baseName] {
+			continue
+		}
+
 		srcFile := filepath.Join(activeEtcSource, relPath)
 		dstFile := filepath.Join(newEtcDir, relPath)
 
@@ -215,12 +231,13 @@ func findModifiedFiles(pristineDir, activeDir string) ([]string, error) {
 func copyActiveEtc(srcDir, dstDir string) error {
 	fmt.Println("  Copying configuration files from active system...")
 
-	// Use rsync to copy, but exclude certain files
+	// Use rsync to copy, but exclude certain files that are system-specific
 	cmd := exec.Command("rsync", "-a",
 		"--exclude=fstab",       // fstab is generated
 		"--exclude=mtab",        // mtab is dynamic
 		"--exclude=hostname",    // might be container-specific
 		"--exclude=resolv.conf", // often a symlink
+		"--exclude=os-release",  // system identity - from container image
 		srcDir+"/", dstDir+"/")
 
 	if output, err := cmd.CombinedOutput(); err != nil {

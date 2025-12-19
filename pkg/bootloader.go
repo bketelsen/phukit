@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,19 +56,20 @@ func (b *BootloaderInstaller) SetVerbose(verbose bool) {
 }
 
 // copyKernelFromModules copies kernel and initramfs from /usr/lib/modules/$KERNEL_VERSION/ to /boot
-// For systemd-boot, copies to /boot/efi (EFI partition) since systemd-boot runs from ESP
-// For GRUB, copies to /boot (boot partition) where GRUB expects them
+// Since boot partition is now a combined EFI/boot partition, all files go to /boot
 func (b *BootloaderInstaller) copyKernelFromModules() error {
 	modulesDir := filepath.Join(b.TargetDir, "usr", "lib", "modules")
 
-	// Determine destination directory based on bootloader type
-	var bootDir string
-	if b.Type == BootloaderSystemdBoot {
-		// systemd-boot needs files on the EFI System Partition
-		bootDir = filepath.Join(b.TargetDir, "boot", "efi")
-	} else {
-		// GRUB uses the boot partition
-		bootDir = filepath.Join(b.TargetDir, "boot")
+	// All bootloaders now use /boot (which is the EFI System Partition)
+	bootDir := filepath.Join(b.TargetDir, "boot")
+
+	// Remove any existing boot entries from the container image
+	// These may have wrong OS names (e.g., "Fedora" when we're installing "Snow Linux")
+	entriesDir := filepath.Join(bootDir, "loader", "entries")
+	if entries, err := filepath.Glob(filepath.Join(entriesDir, "*.conf")); err == nil {
+		for _, entry := range entries {
+			os.Remove(entry)
+		}
 	}
 
 	// Find kernel version directories
@@ -109,11 +111,7 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 		if err := copyFile(srcKernel, destKernel); err != nil {
 			return fmt.Errorf("failed to copy kernel %s: %w", kernelName, err)
 		}
-		if b.Type == BootloaderSystemdBoot {
-			fmt.Printf("  Copied kernel to EFI partition: %s\n", kernelName)
-		} else {
-			fmt.Printf("  Copied kernel to boot partition: %s\n", kernelName)
-		}
+		fmt.Printf("  Copied kernel to boot partition: %s\n", kernelName)
 
 		// Look for initramfs in /usr/lib/modules/$KERNEL_VERSION/
 		initrdPatterns := []string{
@@ -131,11 +129,7 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 				if err := copyFile(pattern, destInitrd); err != nil {
 					return fmt.Errorf("failed to copy initramfs %s: %w", initrdName, err)
 				}
-				if b.Type == BootloaderSystemdBoot {
-					fmt.Printf("  Copied initramfs to EFI partition: %s\n", initrdName)
-				} else {
-					fmt.Printf("  Copied initramfs to boot partition: %s\n", initrdName)
-				}
+				fmt.Printf("  Copied initramfs to boot partition: %s\n", initrdName)
 				break // Only copy the first matching initramfs
 			}
 		}
@@ -176,7 +170,7 @@ func (b *BootloaderInstaller) installGRUB2() error {
 	// Install GRUB to the disk
 	args := []string{
 		"--target=x86_64-efi",
-		"--efi-directory=" + filepath.Join(b.TargetDir, "boot", "efi"),
+		"--efi-directory=" + filepath.Join(b.TargetDir, "boot"),
 		"--boot-directory=" + filepath.Join(b.TargetDir, "boot"),
 		"--bootloader-id=BOOT",
 		"--removable", // Install to removable media path for compatibility
@@ -285,19 +279,50 @@ menuentry '%s' {
 func (b *BootloaderInstaller) installSystemdBoot() error {
 	fmt.Println("  Installing systemd-boot...")
 
-	// Check if bootctl is available
-	if _, err := exec.LookPath("bootctl"); err != nil {
-		return fmt.Errorf("bootctl not found, systemd-boot requires systemd")
+	espPath := filepath.Join(b.TargetDir, "boot")
+
+	// Create EFI directory structure
+	efiSystemdDir := filepath.Join(espPath, "EFI", "systemd")
+	efiBootDir := filepath.Join(espPath, "EFI", "BOOT")
+	if err := os.MkdirAll(efiSystemdDir, 0755); err != nil {
+		return fmt.Errorf("failed to create EFI/systemd directory: %w", err)
+	}
+	if err := os.MkdirAll(efiBootDir, 0755); err != nil {
+		return fmt.Errorf("failed to create EFI/BOOT directory: %w", err)
 	}
 
-	// Install systemd-boot
-	cmd := exec.Command("bootctl", "--root="+b.TargetDir, "install")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install systemd-boot: %w", err)
+	// Find systemd-boot EFI binary in the container image
+	// Check both signed and unsigned variants
+	efiSourcePaths := []string{
+		filepath.Join(b.TargetDir, "usr", "lib", "systemd", "boot", "efi", "systemd-bootx64.efi.signed"),
+		filepath.Join(b.TargetDir, "usr", "lib", "systemd", "boot", "efi", "systemd-bootx64.efi"),
+		filepath.Join(b.TargetDir, "usr", "lib64", "systemd", "boot", "efi", "systemd-bootx64.efi.signed"),
+		filepath.Join(b.TargetDir, "usr", "lib64", "systemd", "boot", "efi", "systemd-bootx64.efi"),
 	}
+
+	var efiSource string
+	for _, path := range efiSourcePaths {
+		if _, err := os.Stat(path); err == nil {
+			efiSource = path
+			break
+		}
+	}
+
+	if efiSource == "" {
+		return fmt.Errorf("systemd-boot EFI binary not found in container image")
+	}
+
+	// Copy to EFI/systemd/systemd-bootx64.efi
+	if err := copyEFIFile(efiSource, filepath.Join(efiSystemdDir, "systemd-bootx64.efi")); err != nil {
+		return fmt.Errorf("failed to copy systemd-boot EFI: %w", err)
+	}
+
+	// Copy to EFI/BOOT/BOOTX64.EFI for removable media boot
+	if err := copyEFIFile(efiSource, filepath.Join(efiBootDir, "BOOTX64.EFI")); err != nil {
+		return fmt.Errorf("failed to copy fallback EFI: %w", err)
+	}
+
+	fmt.Println("  Installed systemd-boot EFI binaries")
 
 	// Generate loader configuration
 	if err := b.generateSystemdBootConfig(); err != nil {
@@ -306,6 +331,24 @@ func (b *BootloaderInstaller) installSystemdBoot() error {
 
 	fmt.Println("  systemd-boot installation complete")
 	return nil
+}
+
+// copyEFIFile copies a file from src to dst
+func copyEFIFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	dest, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+
+	_, err = io.Copy(dest, source)
+	return err
 }
 
 // generateSystemdBootConfig generates systemd-boot configuration
@@ -324,21 +367,21 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		return fmt.Errorf("failed to get var UUID: %w", err)
 	}
 
-	// Find kernel on EFI partition (where systemd-boot expects them)
-	efiDir := filepath.Join(b.TargetDir, "boot", "efi")
-	kernels, err := filepath.Glob(filepath.Join(efiDir, "vmlinuz-*"))
+	// Find kernel on boot partition (combined EFI/boot partition)
+	bootDir := filepath.Join(b.TargetDir, "boot")
+	kernels, err := filepath.Glob(filepath.Join(bootDir, "vmlinuz-*"))
 	if err != nil || len(kernels) == 0 {
-		return fmt.Errorf("no kernel found in /boot/efi")
+		return fmt.Errorf("no kernel found in /boot")
 	}
 	kernel := filepath.Base(kernels[0])
 	kernelVersion := strings.TrimPrefix(kernel, "vmlinuz-")
 
-	// Look for initramfs on EFI partition
+	// Look for initramfs on boot partition
 	var initrd string
 	initrdPatterns := []string{
-		filepath.Join(efiDir, "initramfs-"+kernelVersion+".img"),
-		filepath.Join(efiDir, "initrd.img-"+kernelVersion),
-		filepath.Join(efiDir, "initramfs-"+kernelVersion),
+		filepath.Join(bootDir, "initramfs-"+kernelVersion+".img"),
+		filepath.Join(bootDir, "initrd.img-"+kernelVersion),
+		filepath.Join(bootDir, "initramfs-"+kernelVersion),
 	}
 	for _, pattern := range initrdPatterns {
 		if _, err := os.Stat(pattern); err == nil {
@@ -356,8 +399,8 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
-	// Create loader configuration
-	loaderDir := filepath.Join(b.TargetDir, "boot", "efi", "loader")
+	// Create loader configuration (in /boot/loader since /boot is the ESP)
+	loaderDir := filepath.Join(b.TargetDir, "boot", "loader")
 	if err := os.MkdirAll(loaderDir, 0755); err != nil {
 		return fmt.Errorf("failed to create loader directory: %w", err)
 	}
@@ -372,8 +415,13 @@ editor yes
 		return fmt.Errorf("failed to write loader.conf: %w", err)
 	}
 
-	// Create boot entry
+	// Remove any existing boot entries (from container image or bootctl install)
 	entriesDir := filepath.Join(loaderDir, "entries")
+	if entries, err := filepath.Glob(filepath.Join(entriesDir, "*.conf")); err == nil {
+		for _, entry := range entries {
+			os.Remove(entry)
+		}
+	}
 	if err := os.MkdirAll(entriesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create entries directory: %w", err)
 	}
@@ -389,7 +437,7 @@ options %s
 		return fmt.Errorf("failed to write boot entry: %w", err)
 	}
 
-	fmt.Println("  Created systemd-boot configuration")
+	fmt.Printf("  Created boot entry: %s\n", b.OSName)
 	return nil
 }
 

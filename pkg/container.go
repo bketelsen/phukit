@@ -289,15 +289,14 @@ func CreateFstab(targetDir string, scheme *PartitionScheme) error {
 	}
 
 	// Create fstab content
-	// Note: /boot and /boot/efi are auto-mounted by systemd-gpt-auto-generator
+	// Note: /boot is auto-mounted by systemd-gpt-auto-generator (ESP partition type)
 	// Note: /var is mounted via kernel command line (systemd.mount-extra)
 	fstabContent := fmt.Sprintf(`# /etc/fstab
 # Created by phukit
 #
 # Most mounts are handled automatically:
 # - Root: specified via kernel cmdline root=UUID parameter
-# - /boot: auto-mounted by systemd (XBOOTLDR partition type)
-# - /boot/efi: auto-mounted by systemd (ESP partition type)
+# - /boot: auto-mounted by systemd (ESP partition type, labeled UEFI)
 # - /var: mounted via kernel cmdline systemd.mount-extra parameter
 #
 # This file is kept minimal and can be empty on systems with discoverable partitions.

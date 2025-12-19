@@ -174,6 +174,11 @@ func (b *BootcInstaller) Install() error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
+	// Install /etc persistence mount unit (bind mounts /var/etc to /etc)
+	if err := InstallEtcMountUnit(b.MountPoint, b.DryRun); err != nil {
+		return fmt.Errorf("failed to install /etc mount unit: %w", err)
+	}
+
 	// Save pristine /etc for future updates
 	if err := SavePristineEtc(b.MountPoint, b.DryRun); err != nil {
 		return fmt.Errorf("failed to save pristine /etc: %w", err)

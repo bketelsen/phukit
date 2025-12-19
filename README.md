@@ -271,6 +271,32 @@ The update command automatically compares the installed image digest with the re
 
 After update, reboot to activate the new system. The previous version remains available in the boot menu for rollback.
 
+### Check System Status
+
+View the current system status including installed image, digest, and active partition:
+
+```bash
+# Show current status
+phukit status
+
+# Verbose output (includes update check)
+phukit status -v
+```
+
+Example output:
+
+```
+phukit System Status
+====================
+Image:        quay.io/centos-bootc/centos-bootc:stream9
+Digest:       sha256:abc123de
+Device:       /dev/sda
+Active Root:  /dev/sda3 (Slot A)
+Bootloader:   grub2
+```
+
+With verbose mode (`-v`), additional information is shown including install date, kernel arguments, and whether an update is available.
+
 ### Global Flags
 
 ```bash

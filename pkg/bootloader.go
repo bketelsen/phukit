@@ -68,7 +68,7 @@ func (b *BootloaderInstaller) copyKernelFromModules() error {
 	entriesDir := filepath.Join(bootDir, "loader", "entries")
 	if entries, err := filepath.Glob(filepath.Join(entriesDir, "*.conf")); err == nil {
 		for _, entry := range entries {
-			os.Remove(entry)
+			_ = os.Remove(entry)
 		}
 	}
 
@@ -339,13 +339,13 @@ func copyEFIFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	dest, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer dest.Close()
+	defer func() { _ = dest.Close() }()
 
 	_, err = io.Copy(dest, source)
 	return err
@@ -419,7 +419,7 @@ editor yes
 	entriesDir := filepath.Join(loaderDir, "entries")
 	if entries, err := filepath.Glob(filepath.Join(entriesDir, "*.conf")); err == nil {
 		for _, entry := range entries {
-			os.Remove(entry)
+			_ = os.Remove(entry)
 		}
 	}
 	if err := os.MkdirAll(entriesDir, 0755); err != nil {

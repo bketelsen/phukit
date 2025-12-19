@@ -52,12 +52,6 @@ func (b *BootcInstaller) SetMountPoint(mountPoint string) {
 	b.MountPoint = mountPoint
 }
 
-// CheckPodmanAvailable is deprecated - container operations now use go-containerregistry
-// Kept for backwards compatibility but does nothing
-func CheckPodmanAvailable() error {
-	return nil
-}
-
 // CheckRequiredTools checks if required tools are available
 func CheckRequiredTools() error {
 	tools := []string{
@@ -174,9 +168,10 @@ func (b *BootcInstaller) Install() error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	// Install /etc persistence mount unit (bind mounts /var/etc to /etc)
+	// Setup /etc persistence (verifies /etc and creates backup in /var/etc.backup)
+	// Note: /etc stays on the root filesystem for reliable boot
 	if err := InstallEtcMountUnit(b.MountPoint, b.DryRun); err != nil {
-		return fmt.Errorf("failed to install /etc mount unit: %w", err)
+		return fmt.Errorf("failed to setup /etc persistence: %w", err)
 	}
 
 	// Save pristine /etc for future updates
@@ -261,9 +256,6 @@ func (b *BootcInstaller) InstallComplete(skipPull bool) error {
 	fmt.Println("Checking prerequisites...")
 	if err := CheckRequiredTools(); err != nil {
 		return fmt.Errorf("missing required tools: %w", err)
-	}
-	if err := CheckPodmanAvailable(); err != nil {
-		return err
 	}
 
 	// Validate disk

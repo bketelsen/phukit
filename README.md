@@ -32,7 +32,7 @@ During installation or update, `phukit` will automatically copy these files from
 The container image should follow standard Linux Filesystem Hierarchy Standard (FHS):
 
 - `/usr`: System binaries and libraries (read-only in production)
-- `/etc`: Configuration files (will be managed with 3-way merge during updates)
+- `/etc`: Configuration files (user modifications merged during A/B updates)
 - `/var`: Variable data (symlinked to shared partition)
 - `/home`: User home directories (symlinked to `/var/home`)
 - `/root`: Root user home directory (symlinked to `/var/roothome`)
@@ -99,7 +99,7 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 - 🚀 **Automated Installation**: Complete installation workflow with safety checks
 - 🔄 **A/B Updates**: Dual root partition system for safe, atomic updates with rollback
 - 🔧 **Kernel Arguments**: Support for custom kernel arguments
-- 💾 **/etc Persistence**: Three-way merge preserves user configuration across updates
+- 💾 **/etc Persistence**: User configuration preserved on root filesystem with merge during A/B updates
 - 🏷️ **Multiple Device Types**: Supports SATA (sd\*), NVMe (nvme\*), virtio (vd\*), and MMC devices
 - 🛡️ **Safety Features**: Confirmation prompts and force flag for automation
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
@@ -321,7 +321,7 @@ Updates use the inactive root partition for safe atomic updates:
 4. **Mounting**: Mounts target partition and boot partition
 5. **Clearing**: Removes old content from target partition
 6. **Extraction**: Extracts new filesystem to target partition
-7. **/etc Merge**: Performs 3-way merge to preserve user configuration
+7. **/etc Merge**: Merges user modifications from active root to new root
 8. **System Directories**: Sets up necessary system directories
 9. **Bootloader Update**: Updates GRUB to boot from new partition by default
 10. **Dual Boot Menu**: Creates menu entries for both updated and previous systems
@@ -330,20 +330,26 @@ After reboot, the system boots from the new partition. The old partition remains
 
 ### /etc Configuration Persistence
 
-`phukit` implements a 3-way merge for `/etc` configuration during updates:
+`phukit` keeps `/etc` on the root filesystem for reliable boot. During A/B updates, user modifications are merged from the active root to the new root:
 
-1. **Pristine**: Original `/etc` from initial installation (stored in `/var/lib/phukit/etc.pristine`)
-2. **Active**: Current `/etc` with user modifications
-3. **New**: Fresh `/etc` from new container image
+**How it works:**
 
-The merge algorithm:
+1. **Initial Install**: `/etc` from the container image is extracted to the root filesystem
+2. **Backup**: A backup copy is stored in `/var/etc.backup` for disaster recovery
+3. **During Updates**: User modifications are merged from the old root's `/etc` to the new root's `/etc`
 
-- Files modified by user in active system → **preserved** in new system
-- Files unchanged from pristine → **updated** from new container
+**Merge behavior during updates:**
+
+- Files added by user (not in container) → **preserved** in new system
+- User-modified config files (passwd, hostname, etc.) → **preserved** from active system
+- System identity files (os-release) → **always from new container**
 - New files in container → **added** to new system
-- Files deleted by user → **remain deleted** in new system
 
-This ensures user configuration survives updates while allowing package updates to deliver new defaults.
+**Why not bind-mount /var/etc?**
+
+Early versions attempted to bind-mount `/var/etc` to `/etc` at boot, but this caused boot failures because critical services (dbus-broker, systemd-journald) need `/etc` before the mount completes. Keeping `/etc` on the root filesystem ensures reliable boot.
+
+This approach ensures user configuration survives updates while maintaining a reliable boot process.
 
 ## System Configuration
 

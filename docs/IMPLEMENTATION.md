@@ -75,7 +75,12 @@ The complete installation workflow (6 steps):
 5. Configure System
    ├─ Create /etc/fstab (minimal, most mounts auto-discovered)
    ├─ Setup system directories (dev, proc, sys, run, tmp)
+   ├─ Verify /etc and create backup in /var/etc.backup
    └─ Parse os-release for OS name
+
+   Note: /etc stays on the root filesystem for reliable boot.
+   Early attempts to bind-mount /var/etc to /etc failed because
+   services like dbus-broker need /etc before /var is mounted.
 
 6. Install Bootloader
    ├─ Detect bootloader type (GRUB2/systemd-boot)

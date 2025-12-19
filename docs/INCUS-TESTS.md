@@ -117,7 +117,7 @@ Performs an A/B update:
 
 - Pulls new image
 - Installs to inactive partition (root2)
-- Performs 3-way /etc merge
+- Merges user /etc modifications from active root to new root
 - Updates bootloader
 
 ### 8. Verify A/B Partitions

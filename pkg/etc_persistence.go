@@ -5,30 +5,41 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 const (
 	// PristineEtcPath is where we store the pristine /etc from installation
 	PristineEtcPath = "/var/lib/phukit/etc.pristine"
-	// VarEtcPath is where user /etc modifications are persisted
-	VarEtcPath = "/var/etc"
+	// VarEtcPath is DEPRECATED - we no longer use /var/etc for boot-time bind mount
+	// Kept for documentation purposes
+	VarEtcPath = "/var/etc.backup"
 )
 
-// InstallEtcMountUnit creates a systemd mount unit that bind-mounts /var/etc to /etc
-// This ensures /etc changes persist across A/B partition updates
-func InstallEtcMountUnit(targetDir string, dryRun bool) error {
+// SetupEtcPersistence ensures /etc is properly configured for persistence across A/B updates.
+//
+// IMPORTANT: We do NOT bind-mount /var/etc to /etc at boot time.
+// The bind-mount approach causes critical boot failures because:
+// 1. Services like dbus-broker, systemd-journald need /etc very early in boot
+// 2. The etc.mount unit runs too late (after var.mount, before local-fs.target)
+// 3. Early systemd generators and services fail trying to read unmounted /etc
+//
+// Instead, we keep /etc on the root filesystem where services expect it.
+// For A/B updates, /etc contents are merged from the old root to the new root
+// during the update process (see MergeEtcFromActive).
+//
+// We still backup /etc to /var/etc for disaster recovery purposes.
+func SetupEtcPersistence(targetDir string, dryRun bool) error {
 	if dryRun {
-		fmt.Printf("[DRY RUN] Would install etc.mount systemd unit\n")
+		fmt.Printf("[DRY RUN] Would setup /etc persistence\n")
 		return nil
 	}
 
-	fmt.Println("  Installing /etc persistence mount unit...")
+	fmt.Println("  Setting up /etc persistence...")
 
-	// Verify source /etc exists and has content
+	// Verify /etc exists and has content
 	etcSource := filepath.Join(targetDir, "etc")
 	if _, err := os.Stat(etcSource); os.IsNotExist(err) {
-		return fmt.Errorf("source /etc does not exist at %s", etcSource)
+		return fmt.Errorf("/etc does not exist at %s", etcSource)
 	}
 
 	// List contents of /etc for debugging
@@ -47,91 +58,45 @@ func InstallEtcMountUnit(targetDir string, dryRun bool) error {
 		path := filepath.Join(etcSource, f)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			fmt.Printf("  Warning: critical file %s not found in /etc\n", f)
+		} else {
+			fmt.Printf("  ✓ Found %s in /etc\n", f)
 		}
 	}
 
-	// Create /var/etc directory on target
-	varEtcDir := filepath.Join(targetDir, "var", "etc")
+	// Create backup of /etc in /var/etc for disaster recovery
+	// This is NOT used for boot-time mounting, only as a backup
+	varEtcDir := filepath.Join(targetDir, "var", "etc.backup")
 	if err := os.MkdirAll(varEtcDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /var/etc directory: %w", err)
+		return fmt.Errorf("failed to create /var/etc.backup directory: %w", err)
 	}
 
-	// Copy current /etc contents to /var/etc as initial state
-	cmd := exec.Command("rsync", "-av", etcSource+"/", varEtcDir+"/")
+	// Backup /etc contents to /var/etc.backup
+	cmd := exec.Command("rsync", "-al", etcSource+"/", varEtcDir+"/")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to copy /etc to /var/etc: %w\nOutput: %s", err, string(output))
-	}
-	fmt.Println("  Copied /etc to /var/etc")
-
-	// Verify critical files were copied
-	for _, f := range criticalFiles {
-		path := filepath.Join(varEtcDir, f)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("critical file %s not copied to /var/etc", f)
-		}
-	}
-	fmt.Println("  Verified critical files in /var/etc")
-
-	// Create the systemd mount unit
-	// Note: etc.mount is a special name that systemd auto-generates for /etc
-	// We need to use a different approach - use a .mount unit with escaped path
-	mountUnitContent := `[Unit]
-Description=Bind mount /var/etc to /etc for persistence
-DefaultDependencies=no
-After=var.mount local-fs-pre.target
-Requires=var.mount
-Before=local-fs.target sysinit.target
-ConditionPathExists=/var/etc
-
-[Mount]
-What=/var/etc
-Where=/etc
-Type=none
-Options=bind
-
-[Install]
-WantedBy=local-fs.target
-`
-
-	// Write mount unit to /usr/lib/systemd/system/
-	systemdDir := filepath.Join(targetDir, "usr", "lib", "systemd", "system")
-	if err := os.MkdirAll(systemdDir, 0755); err != nil {
-		return fmt.Errorf("failed to create systemd directory: %w", err)
+		fmt.Printf("  Warning: failed to backup /etc to /var/etc.backup: %v\nOutput: %s\n", err, string(output))
+		// Don't fail on backup error - it's not critical for boot
+	} else {
+		fmt.Println("  Created /etc backup in /var/etc.backup")
 	}
 
-	mountUnitPath := filepath.Join(systemdDir, "etc.mount")
-	if err := os.WriteFile(mountUnitPath, []byte(mountUnitContent), 0644); err != nil {
-		return fmt.Errorf("failed to write etc.mount unit: %w", err)
-	}
-
-	// Enable the mount unit by creating symlink in local-fs.target.wants
-	wantsDir := filepath.Join(systemdDir, "local-fs.target.wants")
-	if err := os.MkdirAll(wantsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create local-fs.target.wants directory: %w", err)
-	}
-
-	symlinkPath := filepath.Join(wantsDir, "etc.mount")
-	// Remove existing symlink if present
-	_ = os.Remove(symlinkPath)
-	// Use relative symlink so it works after boot
-	if err := os.Symlink("../etc.mount", symlinkPath); err != nil {
-		return fmt.Errorf("failed to enable etc.mount unit: %w", err)
-	}
-
-	// Also enable in sysinit.target.wants for earlier activation
-	sysinitWantsDir := filepath.Join(systemdDir, "sysinit.target.wants")
-	if err := os.MkdirAll(sysinitWantsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create sysinit.target.wants directory: %w", err)
-	}
-
-	sysinitSymlinkPath := filepath.Join(sysinitWantsDir, "etc.mount")
-	_ = os.Remove(sysinitSymlinkPath)
-	if err := os.Symlink("../etc.mount", sysinitSymlinkPath); err != nil {
-		return fmt.Errorf("failed to enable etc.mount in sysinit.target: %w", err)
-	}
-
-	fmt.Println("  /etc persistence mount unit installed")
+	fmt.Println("  /etc persistence setup complete (/etc stays on root filesystem)")
 	return nil
+}
+
+// InstallEtcMountUnit is DEPRECATED - do not use.
+// The bind-mount approach causes boot failures because services need /etc before the mount happens.
+// This function is kept for backwards compatibility but does nothing.
+// Use SetupEtcPersistence instead.
+func InstallEtcMountUnit(targetDir string, dryRun bool) error {
+	// DEPRECATED: The bind-mount approach doesn't work because:
+	// - dbus-broker and other early services need /etc before var.mount completes
+	// - systemd generators run before etc.mount can activate
+	// - This causes "Failed to read /etc/passwd" and similar errors
+	//
+	// Instead, we now keep /etc on the root filesystem and only use
+	// /var/etc.backup for disaster recovery, not for boot-time mounting.
+	fmt.Println("  Note: /etc bind-mount skipped (using root filesystem /etc for reliability)")
+	return SetupEtcPersistence(targetDir, dryRun)
 }
 
 // SavePristineEtc saves a copy of the pristine /etc after installation
@@ -162,128 +127,152 @@ func SavePristineEtc(targetDir string, dryRun bool) error {
 	return nil
 }
 
-// MergeEtcFromActive merges /etc configuration during updates
-// With the /var/etc bind mount approach:
-// - /var/etc is on the shared /var partition (persists across A/B updates)
-// - New container's /etc may have new files that need to be added to /var/etc
-// - We merge new files from container /etc into /var/etc, preserving user modifications
+// MergeEtcFromActive merges /etc configuration from the active root during A/B updates.
+//
+// This function is called during the update process to preserve user modifications
+// to /etc when switching to a new root partition. The approach is:
+//
+// 1. Mount the currently active root partition (contains user's modified /etc)
+// 2. Mount the new root partition (contains fresh /etc from container image)
+// 3. Merge user modifications from active /etc into new /etc, preserving:
+//   - User-added files (not in container image)
+//   - User-modified files (changed from container defaults)
+//
+// 4. System identity files (like /etc/os-release) always come from the new container
 //
 // Parameters:
-// - targetDir: mount point of the NEW root partition (e.g., /tmp/phukit-update)
-// - activeRootPartition: the CURRENT root partition device (not used with /var/etc approach)
-// - dryRun: if true, don't make changes
+//   - targetDir: mount point of the NEW root partition (e.g., /tmp/phukit-update)
+//   - activeRootPartition: the CURRENT root partition device (contains user's /etc)
+//   - dryRun: if true, don't make changes
 func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun bool) error {
 	if dryRun {
 		fmt.Printf("[DRY RUN] Would merge /etc from active system\n")
 		return nil
 	}
 
-	fmt.Println("  Merging /etc configuration...")
+	fmt.Println("  Merging /etc configuration from active system...")
 
-	// With the /var/etc bind mount approach, /var/etc is on the shared /var partition.
-	// During update, we need to:
-	// 1. Detect the partition scheme to find /var
-	// 2. Mount /var if not already mounted
-	// 3. Merge new files from container's /etc into /var/etc
-	// 4. Install the etc.mount unit on the new root
+	// Mount the active root partition to access user's /etc
+	activeMountPoint := "/tmp/phukit-active-root"
+	if err := os.MkdirAll(activeMountPoint, 0755); err != nil {
+		return fmt.Errorf("failed to create active root mount point: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(activeMountPoint) }()
 
-	// Derive device from active root partition
-	device := activeRootPartition
-	// Strip partition number suffix (e.g., /dev/sda2 -> /dev/sda, /dev/nvme0n1p2 -> /dev/nvme0n1)
-	for _, suffix := range []string{"p2", "p3", "2", "3"} {
-		device = strings.TrimSuffix(device, suffix)
+	mountCmd := exec.Command("mount", "-o", "ro", activeRootPartition, activeMountPoint)
+	if err := mountCmd.Run(); err != nil {
+		return fmt.Errorf("failed to mount active root partition %s: %w", activeRootPartition, err)
+	}
+	defer func() { _ = exec.Command("umount", activeMountPoint).Run() }()
+
+	activeEtc := filepath.Join(activeMountPoint, "etc")
+	newEtc := filepath.Join(targetDir, "etc")
+
+	// Check if active /etc exists
+	if _, err := os.Stat(activeEtc); os.IsNotExist(err) {
+		fmt.Println("  No /etc found on active root, using container defaults")
+		return SetupEtcPersistence(targetDir, dryRun)
 	}
 
-	scheme, err := DetectExistingPartitionScheme(device)
-	if err != nil {
-		return fmt.Errorf("failed to detect partition scheme: %w", err)
+	// Files that should always come from the NEW container (system identity files)
+	// These should NOT be preserved from the old system
+	systemFilesFromContainer := map[string]bool{
+		"os-release": true,
 	}
 
-	// Mount /var partition temporarily
-	varMountPoint := "/tmp/phukit-var-merge"
-	if err := os.MkdirAll(varMountPoint, 0755); err != nil {
-		return fmt.Errorf("failed to create var mount point: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(varMountPoint) }()
+	// Files/directories that should be preserved from the active system
+	// (user modifications that should persist across updates)
+	fmt.Println("  Merging user modifications from active /etc...")
 
-	varCmd := exec.Command("mount", scheme.VarPartition, varMountPoint)
-	if err := varCmd.Run(); err != nil {
-		return fmt.Errorf("failed to mount /var partition: %w", err)
-	}
-	defer func() { _ = exec.Command("umount", varMountPoint).Run() }()
-
-	// /var/etc location on the mounted /var partition
-	varEtc := filepath.Join(varMountPoint, "etc")
-
-	// Check if /var/etc exists (it should if system was installed with phukit)
-	if _, err := os.Stat(varEtc); os.IsNotExist(err) {
-		fmt.Println("  No existing /var/etc found, creating from container...")
-		if err := os.MkdirAll(varEtc, 0755); err != nil {
-			return fmt.Errorf("failed to create /var/etc: %w", err)
-		}
-		// Copy container's /etc to /var/etc
-		containerEtc := filepath.Join(targetDir, "etc")
-		cmd := exec.Command("rsync", "-a", containerEtc+"/", varEtc+"/")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to copy /etc to /var/etc: %w\nOutput: %s", err, string(output))
-		}
-		fmt.Println("  Created /var/etc from container defaults")
-	} else {
-		// /var/etc exists - merge new files from container without overwriting user modifications
-		containerEtc := filepath.Join(targetDir, "etc")
-		fmt.Println("  Merging new configuration files from container...")
-
-		// Files that should always come from the container (system identity files)
-		systemFiles := map[string]bool{
-			"os-release": true,
+	err := filepath.Walk(activeEtc, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return nil // Skip files we can't access
 		}
 
-		err = filepath.Walk(containerEtc, func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return nil // Skip files we can't access
-			}
+		relPath, _ := filepath.Rel(activeEtc, path)
+		if relPath == "." {
+			return nil
+		}
 
-			relPath, _ := filepath.Rel(containerEtc, path)
-			if relPath == "." {
-				return nil
-			}
+		destPath := filepath.Join(newEtc, relPath)
 
-			destPath := filepath.Join(varEtc, relPath)
+		// Check if this is a symlink
+		linfo, err := os.Lstat(path)
+		if err != nil {
+			return nil // Skip files we can't lstat
+		}
 
-			// Always copy system identity files from container
-			if systemFiles[filepath.Base(relPath)] {
-				if info.IsDir() {
-					return nil
-				}
-				if err := copyFile(path, destPath); err != nil {
-					fmt.Printf("    Warning: failed to copy %s: %v\n", relPath, err)
-				}
-				return nil
-			}
+		isSymlink := linfo.Mode()&os.ModeSymlink != 0
 
-			// Only copy if destination doesn't exist (preserve user modifications)
-			if _, err := os.Stat(destPath); os.IsNotExist(err) {
-				if info.IsDir() {
-					_ = os.MkdirAll(destPath, info.Mode())
-				} else {
-					_ = os.MkdirAll(filepath.Dir(destPath), 0755)
-					if err := copyFile(path, destPath); err != nil {
-						fmt.Printf("    Warning: failed to copy new file %s: %v\n", relPath, err)
-					}
-				}
+		// Skip system identity files - these come from the new container
+		if systemFilesFromContainer[filepath.Base(relPath)] {
+			return nil
+		}
+
+		// Check if this file/directory exists in the new /etc
+		newInfo, newErr := os.Lstat(destPath)
+		fileExistsInNew := newErr == nil
+
+		if linfo.IsDir() {
+			// Create directory if it doesn't exist in new /etc
+			if !fileExistsInNew {
+				_ = os.MkdirAll(destPath, linfo.Mode())
+				fmt.Printf("    + Added directory: %s\n", relPath)
 			}
 			return nil
-		})
-
-		if err != nil {
-			return fmt.Errorf("failed to merge /etc: %w", err)
 		}
+
+		// For files, decide whether to copy based on whether it exists in new /etc
+		if !fileExistsInNew {
+			// File doesn't exist in new container - this is a user-added file, preserve it
+			_ = os.MkdirAll(filepath.Dir(destPath), 0755)
+			if isSymlink {
+				if err := copySymlink(path, destPath); err != nil {
+					fmt.Printf("    Warning: failed to copy user symlink %s: %v\n", relPath, err)
+				} else {
+					fmt.Printf("    + Preserved user symlink: %s\n", relPath)
+				}
+			} else {
+				if err := copyFile(path, destPath); err != nil {
+					fmt.Printf("    Warning: failed to copy user file %s: %v\n", relPath, err)
+				} else {
+					fmt.Printf("    + Preserved user file: %s\n", relPath)
+				}
+			}
+		} else if !newInfo.IsDir() && !linfo.IsDir() {
+			// Both exist as files - check if user modified the file
+			// For now, we preserve user's version for known config files
+			// This is a simple heuristic - a more sophisticated approach would
+			// compare against pristine /etc to detect actual modifications
+			preserveUserModifications := []string{
+				"passwd", "group", "shadow", "gshadow",
+				"hostname", "hosts", "resolv.conf",
+				"fstab", "crypttab",
+				"machine-id",
+			}
+			for _, preserve := range preserveUserModifications {
+				if filepath.Base(relPath) == preserve {
+					if isSymlink {
+						_ = copySymlink(path, destPath)
+					} else {
+						_ = copyFile(path, destPath)
+					}
+					fmt.Printf("    = Preserved user config: %s\n", relPath)
+					break
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to merge /etc: %w", err)
 	}
 
-	// Install the etc.mount unit on the new root partition
-	// This ensures /var/etc is bind-mounted to /etc on boot
-	if err := InstallEtcMountUnit(targetDir, dryRun); err != nil {
-		return fmt.Errorf("failed to install etc.mount unit: %w", err)
+	// Setup persistence (creates backup in /var/etc.backup)
+	if err := SetupEtcPersistence(targetDir, dryRun); err != nil {
+		return fmt.Errorf("failed to setup etc persistence: %w", err)
 	}
 
 	fmt.Println("  /etc configuration merged successfully")
@@ -314,4 +303,17 @@ func copyFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+// copySymlink copies a symlink preserving its target
+func copySymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+
+	// Remove existing file/symlink if present
+	_ = os.Remove(dst)
+
+	return os.Symlink(target, dst)
 }

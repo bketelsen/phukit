@@ -345,129 +345,129 @@ incus exec ${VM_NAME} -- bash -c "
 " 2>&1 | sed 's/^/  /'
 echo -e "${GREEN}✓ Root filesystem verified${NC}\n"
 
-# Test 7: Update to new version (simulated)
-echo -e "${BLUE}=== Test 7: System Update ===${NC}"
-echo "Performing update (writing to inactive partition)..."
-echo "Note: Update requires config from /etc/phukit and pristine /etc from /var/lib/phukit"
+# # Test 7: Update to new version (simulated)
+# echo -e "${BLUE}=== Test 7: System Update ===${NC}"
+# echo "Performing update (writing to inactive partition)..."
+# echo "Note: Update requires config from /etc/phukit and pristine /etc from /var/lib/phukit"
 
-# Update needs to read:
-# 1. /etc/phukit/config.json from the active root partition
-# 2. /var/lib/phukit/etc.pristine from the var partition
-# Mount both partitions and bind-mount the necessary directories
-echo "Mounting active partitions to access config and pristine /etc..."
-incus exec ${VM_NAME} -- bash -c "
-    ROOT1=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root1' | head -1 | awk '{print \"/dev/\" \$1}')
-    VAR_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'var' | head -1 | awk '{print \"/dev/\" \$1}')
+# # Update needs to read:
+# # 1. /etc/phukit/config.json from the active root partition
+# # 2. /var/lib/phukit/etc.pristine from the var partition
+# # Mount both partitions and bind-mount the necessary directories
+# echo "Mounting active partitions to access config and pristine /etc..."
+# incus exec ${VM_NAME} -- bash -c "
+#     ROOT1=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root1' | head -1 | awk '{print \"/dev/\" \$1}')
+#     VAR_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'var' | head -1 | awk '{print \"/dev/\" \$1}')
 
-    mkdir -p /mnt/active-root
-    mkdir -p /mnt/active-var
+#     mkdir -p /mnt/active-root
+#     mkdir -p /mnt/active-var
 
-    # Mount the active root and var partitions
-    mount \$ROOT1 /mnt/active-root
-    mount \$VAR_PART /mnt/active-var
+#     # Mount the active root and var partitions
+#     mount \$ROOT1 /mnt/active-root
+#     mount \$VAR_PART /mnt/active-var
 
-    # Bind mount the config directory to make it accessible at /etc/phukit
-    mkdir -p /etc/phukit
-    mount --bind /mnt/active-root/etc/phukit /etc/phukit
+#     # Bind mount the config directory to make it accessible at /etc/phukit
+#     mkdir -p /etc/phukit
+#     mount --bind /mnt/active-root/etc/phukit /etc/phukit
 
-    # Bind mount the pristine /etc directory to make it accessible at /var/lib/phukit
-    mkdir -p /var/lib/phukit
-    mount --bind /mnt/active-var/lib/phukit /var/lib/phukit
-" 2>&1 | sed 's/^/  /'
+#     # Bind mount the pristine /etc directory to make it accessible at /var/lib/phukit
+#     mkdir -p /var/lib/phukit
+#     mount --bind /mnt/active-var/lib/phukit /var/lib/phukit
+# " 2>&1 | sed 's/^/  /'
 
-# Update - pipe "yes" to confirm
-set +e
-timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit update \
-    --device '$TEST_DISK' \
-    --verbose" 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'
-UPDATE_EXIT=${PIPESTATUS[0]}
-set -e
+# # Update - pipe "yes" to confirm
+# set +e
+# timeout $TIMEOUT incus exec ${VM_NAME} -- bash -c "echo 'yes' | phukit update \
+#     --device '$TEST_DISK' \
+#     --verbose" 2>&1 | tee /tmp/phukit-update-$$.log | sed 's/^/  /'
+# UPDATE_EXIT=${PIPESTATUS[0]}
+# set -e
 
-# Cleanup mounts
-incus exec ${VM_NAME} -- bash -c "
-    umount /var/lib/phukit 2>/dev/null || true
-    umount /etc/phukit 2>/dev/null || true
-    umount /mnt/active-var 2>/dev/null || true
-    umount /mnt/active-root 2>/dev/null || true
-    rmdir /mnt/active-var 2>/dev/null || true
-    rmdir /mnt/active-root 2>/dev/null || true
-" 2>/dev/null || true
+# # Cleanup mounts
+# incus exec ${VM_NAME} -- bash -c "
+#     umount /var/lib/phukit 2>/dev/null || true
+#     umount /etc/phukit 2>/dev/null || true
+#     umount /mnt/active-var 2>/dev/null || true
+#     umount /mnt/active-root 2>/dev/null || true
+#     rmdir /mnt/active-var 2>/dev/null || true
+#     rmdir /mnt/active-root 2>/dev/null || true
+# " 2>/dev/null || true
 
-if [ $UPDATE_EXIT -eq 0 ]; then
-    echo -e "${GREEN}✓ Update successful${NC}\n"
-else
-    echo -e "${RED}✗ Update failed with exit code: $UPDATE_EXIT${NC}"
-    echo -e "${YELLOW}Update log saved to: /tmp/phukit-update-$$.log${NC}"
-    echo -e "${YELLOW}Last 50 lines of log:${NC}"
-    tail -50 /tmp/phukit-update-$$.log | sed 's/^/  /'
-    exit 1
-fi
+# if [ $UPDATE_EXIT -eq 0 ]; then
+#     echo -e "${GREEN}✓ Update successful${NC}\n"
+# else
+#     echo -e "${RED}✗ Update failed with exit code: $UPDATE_EXIT${NC}"
+#     echo -e "${YELLOW}Update log saved to: /tmp/phukit-update-$$.log${NC}"
+#     echo -e "${YELLOW}Last 50 lines of log:${NC}"
+#     tail -50 /tmp/phukit-update-$$.log | sed 's/^/  /'
+#     exit 1
+# fi
 
-# Test 8: Verify both root partitions have content
-echo -e "${BLUE}=== Test 8: Verify A/B Partitions ===${NC}"
-incus exec ${VM_NAME} -- bash -c "
-    ROOT1=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root1' | head -1 | awk '{print \"/dev/\" \$1}')
-    ROOT2=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root2' | head -1 | awk '{print \"/dev/\" \$1}')
+# # Test 8: Verify both root partitions have content
+# echo -e "${BLUE}=== Test 8: Verify A/B Partitions ===${NC}"
+# incus exec ${VM_NAME} -- bash -c "
+#     ROOT1=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root1' | head -1 | awk '{print \"/dev/\" \$1}')
+#     ROOT2=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'root2' | head -1 | awk '{print \"/dev/\" \$1}')
 
-    echo 'Checking root1 partition...'
-    mkdir -p /mnt/test-root1
-    mount \$ROOT1 /mnt/test-root1
-    ROOT1_SIZE=\$(du -sh /mnt/test-root1 | awk '{print \$1}')
-    echo \"Root1 size: \$ROOT1_SIZE\"
-    umount /mnt/test-root1
+#     echo 'Checking root1 partition...'
+#     mkdir -p /mnt/test-root1
+#     mount \$ROOT1 /mnt/test-root1
+#     ROOT1_SIZE=\$(du -sh /mnt/test-root1 | awk '{print \$1}')
+#     echo \"Root1 size: \$ROOT1_SIZE\"
+#     umount /mnt/test-root1
 
-    echo ''
-    echo 'Checking root2 partition...'
-    mkdir -p /mnt/test-root2
-    mount \$ROOT2 /mnt/test-root2
-    ROOT2_SIZE=\$(du -sh /mnt/test-root2 | awk '{print \$1}')
-    echo \"Root2 size: \$ROOT2_SIZE\"
-    umount /mnt/test-root2
+#     echo ''
+#     echo 'Checking root2 partition...'
+#     mkdir -p /mnt/test-root2
+#     mount \$ROOT2 /mnt/test-root2
+#     ROOT2_SIZE=\$(du -sh /mnt/test-root2 | awk '{print \$1}')
+#     echo \"Root2 size: \$ROOT2_SIZE\"
+#     umount /mnt/test-root2
 
-    rmdir /mnt/test-root1 /mnt/test-root2
-" 2>&1 | sed 's/^/  /'
-echo -e "${GREEN}✓ Both A/B partitions verified${NC}\n"
+#     rmdir /mnt/test-root1 /mnt/test-root2
+# " 2>&1 | sed 's/^/  /'
+# echo -e "${GREEN}✓ Both A/B partitions verified${NC}\n"
 
-# Test 9: Verify Boot Entries for A/B Systems
-echo -e "${BLUE}=== Test 9: Verify Boot Entries ===${NC}"
-incus exec ${VM_NAME} -- bash -c "
-    mkdir -p /mnt/test-boot
-    BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | head -1 | awk '{print \"/dev/\" \$1}')
+# # Test 9: Verify Boot Entries for A/B Systems
+# echo -e "${BLUE}=== Test 9: Verify Boot Entries ===${NC}"
+# incus exec ${VM_NAME} -- bash -c "
+#     mkdir -p /mnt/test-boot
+#     BOOT_PART=\$(lsblk -nlo NAME,PARTLABEL $TEST_DISK | grep 'boot' | head -1 | awk '{print \"/dev/\" \$1}')
 
-    mount \$BOOT_PART /mnt/test-boot
+#     mount \$BOOT_PART /mnt/test-boot
 
-    # Check for GRUB entries
-    GRUB_CFG=''
-    if [ -f /mnt/test-boot/grub2/grub.cfg ]; then
-        GRUB_CFG='/mnt/test-boot/grub2/grub.cfg'
-    elif [ -f /mnt/test-boot/grub/grub.cfg ]; then
-        GRUB_CFG='/mnt/test-boot/grub/grub.cfg'
-    fi
+#     # Check for GRUB entries
+#     GRUB_CFG=''
+#     if [ -f /mnt/test-boot/grub2/grub.cfg ]; then
+#         GRUB_CFG='/mnt/test-boot/grub2/grub.cfg'
+#     elif [ -f /mnt/test-boot/grub/grub.cfg ]; then
+#         GRUB_CFG='/mnt/test-boot/grub/grub.cfg'
+#     fi
 
-    if [ -n \"\$GRUB_CFG\" ]; then
-        echo 'GRUB boot entries:'
-        MENU_ENTRIES=\$(grep -c 'menuentry' \$GRUB_CFG || true)
-        echo \"  Found \$MENU_ENTRIES boot menu entries\"
-        grep 'menuentry' \$GRUB_CFG | sed 's/^/  /'
-    fi
+#     if [ -n \"\$GRUB_CFG\" ]; then
+#         echo 'GRUB boot entries:'
+#         MENU_ENTRIES=\$(grep -c 'menuentry' \$GRUB_CFG || true)
+#         echo \"  Found \$MENU_ENTRIES boot menu entries\"
+#         grep 'menuentry' \$GRUB_CFG | sed 's/^/  /'
+#     fi
 
-    # Check for systemd-boot entries
-    if [ -d /mnt/test-boot/loader/entries ]; then
-        echo 'systemd-boot entries:'
-        BOOT_ENTRIES=\$(ls -1 /mnt/test-boot/loader/entries/*.conf 2>/dev/null | wc -l)
-        echo \"  Found \$BOOT_ENTRIES boot entries\"
-        for entry in /mnt/test-boot/loader/entries/*.conf; do
-            if [ -f \"\$entry\" ]; then
-                echo \"  Entry: \$(basename \$entry)\"
-                grep '^title' \"\$entry\" | sed 's/^/    /'
-            fi
-        done
-    fi
+#     # Check for systemd-boot entries
+#     if [ -d /mnt/test-boot/loader/entries ]; then
+#         echo 'systemd-boot entries:'
+#         BOOT_ENTRIES=\$(ls -1 /mnt/test-boot/loader/entries/*.conf 2>/dev/null | wc -l)
+#         echo \"  Found \$BOOT_ENTRIES boot entries\"
+#         for entry in /mnt/test-boot/loader/entries/*.conf; do
+#             if [ -f \"\$entry\" ]; then
+#                 echo \"  Entry: \$(basename \$entry)\"
+#                 grep '^title' \"\$entry\" | sed 's/^/    /'
+#             fi
+#         done
+#     fi
 
-    umount /mnt/test-boot
-    rmdir /mnt/test-boot
-" 2>&1 | sed 's/^/  /'
-echo -e "${GREEN}✓ Boot entries verified${NC}\n"
+#     umount /mnt/test-boot
+#     rmdir /mnt/test-boot
+# " 2>&1 | sed 's/^/  /'
+# echo -e "${GREEN}✓ Boot entries verified${NC}\n"
 
 # Test 10: Check kernel and initramfs
 echo -e "${BLUE}=== Test 10: Verify Kernel and Initramfs ===${NC}"

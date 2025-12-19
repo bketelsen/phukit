@@ -725,11 +725,6 @@ options %s
 
 // PerformUpdate performs the complete update workflow
 func (u *SystemUpdater) PerformUpdate(skipPull bool) error {
-	// Check prerequisites
-	fmt.Println("Checking prerequisites...")
-	if err := CheckPodmanAvailable(); err != nil {
-		return err
-	}
 
 	// Prepare update
 	if err := u.PrepareUpdate(); err != nil {

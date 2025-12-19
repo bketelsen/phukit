@@ -152,20 +152,38 @@ func MergeEtcFromActive(targetDir string, activeRootPartition string, dryRun boo
 
 	fmt.Println("  Merging /etc configuration from active system...")
 
-	// Mount the active root partition to access user's /etc
-	activeMountPoint := "/tmp/phukit-active-root"
-	if err := os.MkdirAll(activeMountPoint, 0755); err != nil {
-		return fmt.Errorf("failed to create active root mount point: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(activeMountPoint) }()
+	var activeEtc string
+	var needsUnmount bool
 
-	mountCmd := exec.Command("mount", "-o", "ro", activeRootPartition, activeMountPoint)
-	if err := mountCmd.Run(); err != nil {
-		return fmt.Errorf("failed to mount active root partition %s: %w", activeRootPartition, err)
-	}
-	defer func() { _ = exec.Command("umount", activeMountPoint).Run() }()
+	// Check if the active root is already mounted (we're running on the live system)
+	// by checking if we can access /etc directly and it matches the active partition
+	currentRoot, _ := GetActiveRootPartition()
+	if currentRoot == activeRootPartition {
+		// We're running on the active system, use /etc directly
+		activeEtc = "/etc"
+		needsUnmount = false
+		fmt.Println("  Using live /etc from running system")
+	} else {
+		// Mount the active root partition to access user's /etc
+		activeMountPoint := "/tmp/phukit-active-root"
+		if err := os.MkdirAll(activeMountPoint, 0755); err != nil {
+			return fmt.Errorf("failed to create active root mount point: %w", err)
+		}
+		defer func() { _ = os.RemoveAll(activeMountPoint) }()
 
-	activeEtc := filepath.Join(activeMountPoint, "etc")
+		mountCmd := exec.Command("mount", "-o", "ro", activeRootPartition, activeMountPoint)
+		if err := mountCmd.Run(); err != nil {
+			return fmt.Errorf("failed to mount active root partition %s: %w", activeRootPartition, err)
+		}
+		activeEtc = filepath.Join(activeMountPoint, "etc")
+		needsUnmount = true
+		defer func() {
+			if needsUnmount {
+				_ = exec.Command("umount", activeMountPoint).Run()
+			}
+		}()
+	}
+
 	newEtc := filepath.Join(targetDir, "etc")
 
 	// Check if active /etc exists

@@ -25,6 +25,31 @@ func InstallEtcMountUnit(targetDir string, dryRun bool) error {
 
 	fmt.Println("  Installing /etc persistence mount unit...")
 
+	// Verify source /etc exists and has content
+	etcSource := filepath.Join(targetDir, "etc")
+	if _, err := os.Stat(etcSource); os.IsNotExist(err) {
+		return fmt.Errorf("source /etc does not exist at %s", etcSource)
+	}
+
+	// List contents of /etc for debugging
+	entries, err := os.ReadDir(etcSource)
+	if err != nil {
+		return fmt.Errorf("failed to read /etc directory: %w", err)
+	}
+	fmt.Printf("  /etc contains %d entries\n", len(entries))
+	if len(entries) == 0 {
+		return fmt.Errorf("/etc is empty at %s", etcSource)
+	}
+
+	// Check for critical files in /etc
+	criticalFiles := []string{"passwd", "group", "os-release"}
+	for _, f := range criticalFiles {
+		path := filepath.Join(etcSource, f)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			fmt.Printf("  Warning: critical file %s not found in /etc\n", f)
+		}
+	}
+
 	// Create /var/etc directory on target
 	varEtcDir := filepath.Join(targetDir, "var", "etc")
 	if err := os.MkdirAll(varEtcDir, 0755); err != nil {
@@ -32,11 +57,20 @@ func InstallEtcMountUnit(targetDir string, dryRun bool) error {
 	}
 
 	// Copy current /etc contents to /var/etc as initial state
-	etcSource := filepath.Join(targetDir, "etc")
-	cmd := exec.Command("rsync", "-a", etcSource+"/", varEtcDir+"/")
+	cmd := exec.Command("rsync", "-av", etcSource+"/", varEtcDir+"/")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to copy /etc to /var/etc: %w\nOutput: %s", err, string(output))
 	}
+	fmt.Println("  Copied /etc to /var/etc")
+
+	// Verify critical files were copied
+	for _, f := range criticalFiles {
+		path := filepath.Join(varEtcDir, f)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return fmt.Errorf("critical file %s not copied to /var/etc", f)
+		}
+	}
+	fmt.Println("  Verified critical files in /var/etc")
 
 	// Create the systemd mount unit
 	// Note: etc.mount is a special name that systemd auto-generates for /etc

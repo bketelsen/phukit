@@ -56,6 +56,25 @@ The image should contain:
 - **SSH server**: For remote access
 - **Package manager**: For installing additional software after deployment
 
+### Secure Boot Support
+
+For Secure Boot compatibility, the image should include:
+
+- **shimx64.efi.signed**: The signed shim bootloader (typically from the `shim-signed` package)
+- **mmx64.efi**: MOK (Machine Owner Key) manager for key enrollment (optional)
+
+`phukit` automatically detects these files and sets up the proper EFI boot chain:
+
+```
+EFI/BOOT/
+├── BOOTX64.EFI   ← shimx64.efi (Secure Boot entry point)
+├── grubx64.efi   ← actual bootloader (chain-loaded by shim)
+├── mmx64.efi     ← MOK manager (for key enrollment)
+└── fbx64.efi     ← fallback bootloader (optional)
+```
+
+If shim is not found in the image, `phukit` falls back to direct boot (no Secure Boot).
+
 ### Example Image Structure
 
 ```
@@ -104,6 +123,7 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 - 🛡️ **Safety Features**: Confirmation prompts and force flag for automation
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
 - 🔐 **Configuration Storage**: Stores image reference for easy updates
+- 🔒 **Secure Boot Support**: Automatic shim detection and Secure Boot chain setup
 
 ## Prerequisites
 

@@ -30,6 +30,10 @@ Successfully refactored `phukit` to perform bootc-compatible container installat
    - Configures kernel cmdline with root=UUID and systemd.mount-extra for /var
    - Generates bootloader configuration files
    - Kernel argument customization
+   - **Secure Boot support**: Automatic shim detection and EFI chain setup
+     - Searches for `shimx64.efi.signed` in common locations
+     - Sets up proper boot chain: shim → bootloader
+     - Includes MOK manager for key enrollment
 
 4. **[pkg/bootc.go](pkg/bootc.go)** - Main installation orchestrator
 
@@ -86,6 +90,10 @@ The complete installation workflow (6 steps):
    ├─ Detect bootloader type (GRUB2/systemd-boot)
    ├─ Copy kernel/initramfs from /usr/lib/modules
    ├─ Install bootloader to EFI partition
+   ├─ Setup Secure Boot chain (if shim available):
+   │  ├─ Copy shimx64.efi as BOOTX64.EFI
+   │  ├─ Copy bootloader as grubx64.efi (chain-loaded by shim)
+   │  └─ Copy mmx64.efi for MOK key enrollment
    ├─ Generate boot configuration with:
    │  ├─ root=UUID=<root1-uuid>
    │  └─ systemd.mount-extra=UUID=<var-uuid>:/var:ext4:defaults
@@ -217,7 +225,7 @@ Potential improvements:
 - [ ] Automatic A/B updates
 - [ ] Rollback capability
 - [ ] Pre/post installation hooks
-- [ ] Secure Boot support
+- [x] Secure Boot support (implemented)
 
 ## Files Modified/Created
 

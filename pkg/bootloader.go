@@ -167,11 +167,14 @@ func (b *BootloaderInstaller) installGRUB2() error {
 		grubInstallCmd = "grub2-install"
 	}
 
+	espPath := filepath.Join(b.TargetDir, "boot")
+	efiBootDir := filepath.Join(espPath, "EFI", "BOOT")
+
 	// Install GRUB to the disk
 	args := []string{
 		"--target=x86_64-efi",
-		"--efi-directory=" + filepath.Join(b.TargetDir, "boot"),
-		"--boot-directory=" + filepath.Join(b.TargetDir, "boot"),
+		"--efi-directory=" + espPath,
+		"--boot-directory=" + espPath,
 		"--bootloader-id=BOOT",
 		"--removable", // Install to removable media path for compatibility
 	}
@@ -186,6 +189,33 @@ func (b *BootloaderInstaller) installGRUB2() error {
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install GRUB: %w", err)
+	}
+
+	// Find the GRUB EFI that was just installed
+	grubEFI := filepath.Join(efiBootDir, "BOOTX64.EFI")
+	if _, err := os.Stat(grubEFI); os.IsNotExist(err) {
+		// Try alternate names
+		alternates := []string{
+			filepath.Join(efiBootDir, "grubx64.efi"),
+			filepath.Join(espPath, "EFI", "BOOT", "grubx64.efi"),
+		}
+		for _, alt := range alternates {
+			if _, err := os.Stat(alt); err == nil {
+				grubEFI = alt
+				break
+			}
+		}
+	}
+
+	// Try to set up Secure Boot chain with shim
+	if _, err := os.Stat(grubEFI); err == nil {
+		secureBootEnabled, err := b.setupSecureBootChain(grubEFI)
+		if err != nil {
+			return fmt.Errorf("failed to setup Secure Boot chain: %w", err)
+		}
+		if secureBootEnabled {
+			fmt.Println("  Configured GRUB2 with Secure Boot support")
+		}
 	}
 
 	// Generate GRUB configuration
@@ -317,12 +347,21 @@ func (b *BootloaderInstaller) installSystemdBoot() error {
 		return fmt.Errorf("failed to copy systemd-boot EFI: %w", err)
 	}
 
-	// Copy to EFI/BOOT/BOOTX64.EFI for removable media boot
-	if err := copyEFIFile(efiSource, filepath.Join(efiBootDir, "BOOTX64.EFI")); err != nil {
-		return fmt.Errorf("failed to copy fallback EFI: %w", err)
+	// Try to set up Secure Boot chain with shim
+	secureBootEnabled, err := b.setupSecureBootChain(efiSource)
+	if err != nil {
+		return fmt.Errorf("failed to setup Secure Boot chain: %w", err)
 	}
 
-	fmt.Println("  Installed systemd-boot EFI binaries")
+	if !secureBootEnabled {
+		// No shim available, copy directly to EFI/BOOT/BOOTX64.EFI for removable media boot
+		if err := copyEFIFile(efiSource, filepath.Join(efiBootDir, "BOOTX64.EFI")); err != nil {
+			return fmt.Errorf("failed to copy fallback EFI: %w", err)
+		}
+		fmt.Println("  Installed systemd-boot EFI binaries (no Secure Boot shim found)")
+	} else {
+		fmt.Println("  Installed systemd-boot with Secure Boot support")
+	}
 
 	// Generate loader configuration
 	if err := b.generateSystemdBootConfig(); err != nil {
@@ -441,14 +480,120 @@ options %s
 	return nil
 }
 
-// func canSystemdSecureBoot(targetDir string) bool {
-// 	// Check for presence of shimx64.efi in the targetDir
-// 	shimPath := filepath.Join(targetDir, "usr", "lib", "shim", "shimx64.efi.signed")
-// 	if _, err := os.Stat(shimPath); err == nil {
-// 		return true
-// 	}
-// 	return false
-// }
+// findShimEFI looks for shim EFI binary in the container image for Secure Boot support
+// Returns the path to the shim if found, empty string otherwise
+func findShimEFI(targetDir string) string {
+	// Common locations for shim EFI binary
+	shimPaths := []string{
+		// Fedora/RHEL/CentOS locations
+		filepath.Join(targetDir, "boot", "efi", "EFI", "fedora", "shimx64.efi"),
+		filepath.Join(targetDir, "boot", "efi", "EFI", "centos", "shimx64.efi"),
+		filepath.Join(targetDir, "boot", "efi", "EFI", "redhat", "shimx64.efi"),
+		// Signed shim from shim-signed package
+		filepath.Join(targetDir, "usr", "lib", "shim", "shimx64.efi.signed"),
+		filepath.Join(targetDir, "usr", "lib64", "shim", "shimx64.efi.signed"),
+		filepath.Join(targetDir, "usr", "share", "shim", "shimx64.efi.signed"),
+		// Unsigned shim (less common)
+		filepath.Join(targetDir, "usr", "lib", "shim", "shimx64.efi"),
+		filepath.Join(targetDir, "usr", "lib64", "shim", "shimx64.efi"),
+	}
+
+	for _, path := range shimPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// findMokManager looks for the MOK (Machine Owner Key) manager EFI binary
+// This is needed for Secure Boot key enrollment
+func findMokManager(targetDir string) string {
+	mokPaths := []string{
+		// Fedora/RHEL/CentOS locations
+		filepath.Join(targetDir, "boot", "efi", "EFI", "fedora", "mmx64.efi"),
+		filepath.Join(targetDir, "boot", "efi", "EFI", "centos", "mmx64.efi"),
+		filepath.Join(targetDir, "boot", "efi", "EFI", "redhat", "mmx64.efi"),
+		// From shim package
+		filepath.Join(targetDir, "usr", "lib", "shim", "mmx64.efi.signed"),
+		filepath.Join(targetDir, "usr", "lib64", "shim", "mmx64.efi.signed"),
+		filepath.Join(targetDir, "usr", "share", "shim", "mmx64.efi.signed"),
+		filepath.Join(targetDir, "usr", "lib", "shim", "mmx64.efi"),
+		filepath.Join(targetDir, "usr", "lib64", "shim", "mmx64.efi"),
+	}
+
+	for _, path := range mokPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// setupSecureBootChain sets up the Secure Boot chain with shim
+// The chain is: BOOTX64.EFI (shim) → grubx64.efi/systemd-bootx64.efi
+// Returns true if secure boot chain was set up, false if shim not available
+func (b *BootloaderInstaller) setupSecureBootChain(bootloaderEFI string) (bool, error) {
+	shimPath := findShimEFI(b.TargetDir)
+	if shimPath == "" {
+		return false, nil // No shim available, will use direct boot
+	}
+
+	fmt.Println("  Setting up Secure Boot chain with shim...")
+
+	espPath := filepath.Join(b.TargetDir, "boot")
+	efiBootDir := filepath.Join(espPath, "EFI", "BOOT")
+
+	if err := os.MkdirAll(efiBootDir, 0755); err != nil {
+		return false, fmt.Errorf("failed to create EFI/BOOT directory: %w", err)
+	}
+
+	// Copy shim as BOOTX64.EFI (the UEFI default bootloader path)
+	shimDest := filepath.Join(efiBootDir, "BOOTX64.EFI")
+	if err := copyEFIFile(shimPath, shimDest); err != nil {
+		return false, fmt.Errorf("failed to copy shim to BOOTX64.EFI: %w", err)
+	}
+	fmt.Printf("  Installed shim as BOOTX64.EFI (Secure Boot entry point)\n")
+
+	// Copy the actual bootloader as grubx64.efi (what shim expects to chain-load)
+	// Shim by default looks for grubx64.efi in the same directory
+	bootloaderDest := filepath.Join(efiBootDir, "grubx64.efi")
+	if err := copyEFIFile(bootloaderEFI, bootloaderDest); err != nil {
+		return false, fmt.Errorf("failed to copy bootloader as grubx64.efi: %w", err)
+	}
+	fmt.Printf("  Installed bootloader as grubx64.efi (chain-loaded by shim)\n")
+
+	// Copy MOK manager if available (for key enrollment)
+	mokPath := findMokManager(b.TargetDir)
+	if mokPath != "" {
+		mokDest := filepath.Join(efiBootDir, "mmx64.efi")
+		if err := copyEFIFile(mokPath, mokDest); err != nil {
+			// MOK manager is optional, just warn
+			fmt.Printf("  Warning: failed to copy MOK manager: %v\n", err)
+		} else {
+			fmt.Println("  Installed MOK manager (mmx64.efi)")
+		}
+	}
+
+	// Also copy fbx64.efi (fallback) if available
+	fbPaths := []string{
+		filepath.Join(b.TargetDir, "boot", "efi", "EFI", "fedora", "fbx64.efi"),
+		filepath.Join(b.TargetDir, "boot", "efi", "EFI", "BOOT", "fbx64.efi"),
+		filepath.Join(b.TargetDir, "usr", "lib", "shim", "fbx64.efi"),
+		filepath.Join(b.TargetDir, "usr", "lib64", "shim", "fbx64.efi"),
+	}
+	for _, fbPath := range fbPaths {
+		if _, err := os.Stat(fbPath); err == nil {
+			fbDest := filepath.Join(efiBootDir, "fbx64.efi")
+			if err := copyEFIFile(fbPath, fbDest); err == nil {
+				fmt.Println("  Installed fallback bootloader (fbx64.efi)")
+			}
+			break
+		}
+	}
+
+	return true, nil
+}
 
 // DetectBootloader detects which bootloader should be used based on the container
 func DetectBootloader(targetDir string) BootloaderType {

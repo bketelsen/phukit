@@ -61,6 +61,25 @@ if err != nil {
 - Two bootloader types: `BootloaderGRUB2` and `BootloaderSystemdBoot`
 - Bootloader detection is automatic based on container contents
 - Kernel and initramfs are copied from `/usr/lib/modules/` to appropriate boot partition
+- **Secure Boot**: Automatic shim detection sets up boot chain (shim → bootloader)
+
+### Secure Boot Chain
+
+When `shimx64.efi.signed` is detected in the container image, the EFI boot chain is set up as:
+
+```
+EFI/BOOT/
+├── BOOTX64.EFI   ← shimx64.efi (Secure Boot entry point)
+├── grubx64.efi   ← actual bootloader (chain-loaded by shim)
+├── mmx64.efi     ← MOK manager (optional)
+└── fbx64.efi     ← fallback (optional)
+```
+
+Shim locations searched:
+
+- `/boot/efi/EFI/{fedora,centos,redhat}/shimx64.efi`
+- `/usr/lib{,64}/shim/shimx64.efi.signed`
+- `/usr/share/shim/shimx64.efi.signed`
 
 ### Container Extraction
 

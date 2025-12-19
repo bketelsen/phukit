@@ -266,13 +266,19 @@ func (b *BootloaderInstaller) generateGRUBConfig() error {
 		return fmt.Errorf("failed to get var UUID: %w", err)
 	}
 
+	// Get filesystem type (default to ext4 for backward compatibility)
+	fsType := b.Scheme.FilesystemType
+	if fsType == "" {
+		fsType = "ext4"
+	}
+
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + rootUUID,
 		"ro",
 		"console=tty0",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 
@@ -429,12 +435,18 @@ func (b *BootloaderInstaller) generateSystemdBootConfig() error {
 		}
 	}
 
+	// Get filesystem type (default to ext4 for backward compatibility)
+	fsType := b.Scheme.FilesystemType
+	if fsType == "" {
+		fsType = "ext4"
+	}
+
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + rootUUID,
 		"rw",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 	kernelCmdline = append(kernelCmdline, b.KernelArgs...)
 

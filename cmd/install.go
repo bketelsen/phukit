@@ -13,6 +13,7 @@ var (
 	installDevice     string
 	installSkipPull   bool
 	installKernelArgs []string
+	installFilesystem string
 )
 
 var installCmd = &cobra.Command{
@@ -31,8 +32,11 @@ This command will:
 
 The dual root partitions enable A/B updates for system resilience.
 
+Supported filesystems: ext4 (default), btrfs
+
 Example:
   phukit install --image quay.io/example/myimage:latest --device /dev/sda
+  phukit install --image localhost/myimage --device /dev/nvme0n1 --filesystem btrfs
   phukit install --image localhost/myimage --device /dev/nvme0n1 --karg console=ttyS0`,
 	RunE: runInstall,
 }
@@ -44,6 +48,7 @@ func init() {
 	installCmd.Flags().StringVarP(&installDevice, "device", "d", "", "Target disk device (required)")
 	installCmd.Flags().BoolVar(&installSkipPull, "skip-pull", false, "Skip pulling the image (use already pulled image)")
 	installCmd.Flags().StringArrayVarP(&installKernelArgs, "karg", "k", []string{}, "Kernel argument to pass (can be specified multiple times)")
+	installCmd.Flags().StringVarP(&installFilesystem, "filesystem", "f", "ext4", "Filesystem type for root and var partitions (ext4, btrfs)")
 
 	_ = installCmd.MarkFlagRequired("image")
 	_ = installCmd.MarkFlagRequired("device")
@@ -52,6 +57,11 @@ func init() {
 func runInstall(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	dryRun := viper.GetBool("dry-run")
+
+	// Validate filesystem type
+	if installFilesystem != "ext4" && installFilesystem != "btrfs" {
+		return fmt.Errorf("unsupported filesystem type: %s (supported: ext4, btrfs)", installFilesystem)
+	}
 
 	// Resolve device path
 	device, err := pkg.GetDiskByPath(installDevice)
@@ -67,6 +77,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	installer := pkg.NewBootcInstaller(installImage, device)
 	installer.SetVerbose(verbose)
 	installer.SetDryRun(dryRun)
+	installer.SetFilesystemType(installFilesystem)
 
 	// Add kernel arguments
 	for _, arg := range installKernelArgs {

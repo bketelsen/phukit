@@ -124,6 +124,7 @@ RUN dnf install -y kernel kernel-modules initramfs-tools
 - 📝 **Detailed Logging**: Verbose output for troubleshooting
 - 🔐 **Configuration Storage**: Stores image reference for easy updates
 - 🔒 **Secure Boot Support**: Automatic shim detection and Secure Boot chain setup
+- 📀 **Filesystem Choice**: Support for ext4 (default) and btrfs filesystems
 
 ## Prerequisites
 
@@ -223,6 +224,12 @@ phukit validate -d /dev/disk/by-id/ata-Samsung_SSD_850
 phukit install \
   --image quay.io/centos-bootc/centos-bootc:stream9 \
   --device /dev/sda
+
+# With btrfs filesystem instead of ext4
+phukit install \
+  --image quay.io/centos-bootc/centos-bootc:stream9 \
+  --device /dev/sda \
+  --filesystem btrfs
 
 # With custom kernel arguments
 phukit install \

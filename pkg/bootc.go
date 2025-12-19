@@ -14,21 +14,23 @@ import (
 
 // BootcInstaller handles bootc container installation
 type BootcInstaller struct {
-	ImageRef   string
-	Device     string
-	Verbose    bool
-	DryRun     bool
-	KernelArgs []string
-	MountPoint string
+	ImageRef       string
+	Device         string
+	Verbose        bool
+	DryRun         bool
+	KernelArgs     []string
+	MountPoint     string
+	FilesystemType string // ext4 or btrfs
 }
 
 // NewBootcInstaller creates a new BootcInstaller
 func NewBootcInstaller(imageRef, device string) *BootcInstaller {
 	return &BootcInstaller{
-		ImageRef:   imageRef,
-		Device:     device,
-		KernelArgs: []string{},
-		MountPoint: "/tmp/phukit-install",
+		ImageRef:       imageRef,
+		Device:         device,
+		KernelArgs:     []string{},
+		MountPoint:     "/tmp/phukit-install",
+		FilesystemType: "ext4", // Default to ext4
 	}
 }
 
@@ -50,6 +52,11 @@ func (b *BootcInstaller) AddKernelArg(arg string) {
 // SetMountPoint sets the temporary mount point for installation
 func (b *BootcInstaller) SetMountPoint(mountPoint string) {
 	b.MountPoint = mountPoint
+}
+
+// SetFilesystemType sets the filesystem type for root and var partitions
+func (b *BootcInstaller) SetFilesystemType(fsType string) {
+	b.FilesystemType = fsType
 }
 
 // CheckRequiredTools checks if required tools are available
@@ -115,8 +122,9 @@ func (b *BootcInstaller) Install() error {
 	}
 
 	fmt.Printf("Installing bootc image to disk...\n")
-	fmt.Printf("  Image:  %s\n", b.ImageRef)
-	fmt.Printf("  Device: %s\n", b.Device)
+	fmt.Printf("  Image:      %s\n", b.ImageRef)
+	fmt.Printf("  Device:     %s\n", b.Device)
+	fmt.Printf("  Filesystem: %s\n", b.FilesystemType)
 	fmt.Println()
 
 	// Step 1: Create partitions
@@ -125,6 +133,9 @@ func (b *BootcInstaller) Install() error {
 	if err != nil {
 		return fmt.Errorf("failed to create partitions: %w", err)
 	}
+
+	// Set filesystem type on partition scheme
+	scheme.FilesystemType = b.FilesystemType
 
 	// Step 2: Format partitions
 	fmt.Println("\nStep 2/6: Formatting partitions...")
@@ -196,6 +207,7 @@ func (b *BootcInstaller) Install() error {
 		InstallDate:    time.Now().Format(time.RFC3339),
 		KernelArgs:     b.KernelArgs,
 		BootloaderType: string(DetectBootloader(b.MountPoint)),
+		FilesystemType: b.FilesystemType,
 	}
 	if err := WriteSystemConfigToTarget(b.MountPoint, config, b.DryRun); err != nil {
 		return fmt.Errorf("failed to write system config: %w", err)

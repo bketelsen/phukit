@@ -14,6 +14,7 @@ type PartitionScheme struct {
 	Root1Partition string // First root filesystem partition (12GB)
 	Root2Partition string // Second root filesystem partition (12GB)
 	VarPartition   string // /var partition (remaining space)
+	FilesystemType string // Filesystem type for root/var partitions (ext4, btrfs)
 }
 
 // CreatePartitions creates a GPT partition table with EFI, boot, and root partitions
@@ -117,7 +118,13 @@ func FormatPartitions(scheme *PartitionScheme, dryRun bool) error {
 		return nil
 	}
 
-	fmt.Println("Formatting partitions...")
+	// Default to ext4 if not specified
+	fsType := scheme.FilesystemType
+	if fsType == "" {
+		fsType = "ext4"
+	}
+
+	fmt.Printf("Formatting partitions (filesystem: %s)...\n", fsType)
 
 	// Format boot partition as FAT32 (EFI System Partition)
 	fmt.Printf("  Formatting %s as FAT32 (boot/EFI)...\n", scheme.BootPartition)
@@ -126,28 +133,48 @@ func FormatPartitions(scheme *PartitionScheme, dryRun bool) error {
 		return fmt.Errorf("failed to format boot partition: %w\nOutput: %s", err, string(output))
 	}
 
-	// Format first root partition as ext4
-	fmt.Printf("  Formatting %s as ext4...\n", scheme.Root1Partition)
-	cmd = exec.Command("mkfs.ext4", "-F", "-L", "root1", scheme.Root1Partition)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to format root1 partition: %w\nOutput: %s", err, string(output))
+	// Format first root partition
+	fmt.Printf("  Formatting %s as %s...\n", scheme.Root1Partition, fsType)
+	if err := formatPartition(scheme.Root1Partition, fsType, "root1"); err != nil {
+		return fmt.Errorf("failed to format root1 partition: %w", err)
 	}
 
-	// Format second root partition as ext4
-	fmt.Printf("  Formatting %s as ext4...\n", scheme.Root2Partition)
-	cmd = exec.Command("mkfs.ext4", "-F", "-L", "root2", scheme.Root2Partition)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to format root2 partition: %w\nOutput: %s", err, string(output))
+	// Format second root partition
+	fmt.Printf("  Formatting %s as %s...\n", scheme.Root2Partition, fsType)
+	if err := formatPartition(scheme.Root2Partition, fsType, "root2"); err != nil {
+		return fmt.Errorf("failed to format root2 partition: %w", err)
 	}
 
-	// Format /var partition as ext4
-	fmt.Printf("  Formatting %s as ext4...\n", scheme.VarPartition)
-	cmd = exec.Command("mkfs.ext4", "-F", "-L", "var", scheme.VarPartition)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to format var partition: %w\nOutput: %s", err, string(output))
+	// Format /var partition
+	fmt.Printf("  Formatting %s as %s...\n", scheme.VarPartition, fsType)
+	if err := formatPartition(scheme.VarPartition, fsType, "var"); err != nil {
+		return fmt.Errorf("failed to format var partition: %w", err)
 	}
 
 	fmt.Println("Formatting complete")
+	return nil
+}
+
+// formatPartition formats a single partition with the specified filesystem type
+func formatPartition(partition, fsType, label string) error {
+	var cmd *exec.Cmd
+
+	switch fsType {
+	case "ext4":
+		cmd = exec.Command("mkfs.ext4", "-F", "-L", label, partition)
+	case "btrfs":
+		// Check if mkfs.btrfs is available
+		if _, err := exec.LookPath("mkfs.btrfs"); err != nil {
+			return fmt.Errorf("mkfs.btrfs not found - install btrfs-progs package")
+		}
+		cmd = exec.Command("mkfs.btrfs", "-f", "-L", label, partition)
+	default:
+		return fmt.Errorf("unsupported filesystem type: %s (supported: ext4, btrfs)", fsType)
+	}
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkfs failed: %w\nOutput: %s", err, string(output))
+	}
 	return nil
 }
 

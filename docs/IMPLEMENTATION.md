@@ -125,6 +125,7 @@ The complete installation workflow (6 steps):
 - Automatic bootloader detection (GRUB2 vs systemd-boot)
 - Systemd Discoverable Partitions integration
 - Configurable mount points
+- **Filesystem choice**: ext4 (default) or btrfs for root/var partitions
 
 ### User Experience
 

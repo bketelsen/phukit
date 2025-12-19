@@ -93,6 +93,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 	fmt.Printf("Bootloader:  %s\n", config.BootloaderType)
+	if config.FilesystemType != "" {
+		fmt.Printf("Filesystem:  %s\n", config.FilesystemType)
+	} else {
+		fmt.Printf("Filesystem:  ext4 (default)\n")
+	}
 
 	if verbose {
 		fmt.Println()

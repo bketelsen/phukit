@@ -14,6 +14,14 @@ const (
 	SystemConfigFile = "/etc/phukit/config.json"
 )
 
+// FilesystemType represents the supported filesystem types
+type FilesystemType string
+
+const (
+	FilesystemExt4  FilesystemType = "ext4"
+	FilesystemBtrfs FilesystemType = "btrfs"
+)
+
 // SystemConfig represents the system configuration stored in /etc/phukit/
 type SystemConfig struct {
 	ImageRef       string   `json:"image_ref"`       // Container image reference
@@ -22,6 +30,7 @@ type SystemConfig struct {
 	InstallDate    string   `json:"install_date"`    // Installation timestamp
 	KernelArgs     []string `json:"kernel_args"`     // Custom kernel arguments
 	BootloaderType string   `json:"bootloader_type"` // Bootloader type (grub2, systemd-boot)
+	FilesystemType string   `json:"filesystem_type"` // Filesystem type (ext4, btrfs)
 }
 
 // WriteSystemConfig writes system configuration to /etc/phukit/config.json

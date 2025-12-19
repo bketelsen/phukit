@@ -146,6 +146,7 @@ type UpdaterConfig struct {
 	Device         string
 	ImageRef       string
 	ImageDigest    string // Digest of the remote image (set by IsUpdateNeeded)
+	FilesystemType string // Filesystem type (ext4, btrfs)
 	Verbose        bool
 	DryRun         bool
 	Force          bool // Skip interactive confirmation
@@ -277,6 +278,13 @@ func (u *SystemUpdater) IsUpdateNeeded() (bool, string, error) {
 		fmt.Printf("  Could not read system config: %v\n", err)
 		fmt.Println("  Assuming update is needed")
 		return true, remoteDigest, nil
+	}
+
+	// Store filesystem type from config for use during update
+	if config.FilesystemType != "" {
+		u.Config.FilesystemType = config.FilesystemType
+	} else {
+		u.Config.FilesystemType = "ext4" // Default for older installations
 	}
 
 	if u.Config.Verbose {
@@ -633,12 +641,18 @@ func (u *SystemUpdater) updateGRUBBootloader() error {
 		}
 	}
 
+	// Get filesystem type (default to ext4 for backward compatibility)
+	fsType := u.Config.FilesystemType
+	if fsType == "" {
+		fsType = "ext4"
+	}
+
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + targetUUID,
 		"rw",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
 
@@ -675,7 +689,7 @@ func (u *SystemUpdater) updateGRUBBootloader() error {
 	previousCmdline := []string{
 		"root=UUID=" + activeUUID,
 		"rw",
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 
 	grubCfg := fmt.Sprintf(`set timeout=5
@@ -743,12 +757,18 @@ func (u *SystemUpdater) updateSystemdBootBootloader() error {
 		}
 	}
 
+	// Get filesystem type (default to ext4 for backward compatibility)
+	fsType := u.Config.FilesystemType
+	if fsType == "" {
+		fsType = "ext4"
+	}
+
 	// Build kernel command line
 	kernelCmdline := []string{
 		"root=UUID=" + targetUUID,
 		"rw",
 		// Mount /var via kernel command line (systemd.mount-extra)
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 	kernelCmdline = append(kernelCmdline, u.Config.KernelArgs...)
 
@@ -779,7 +799,7 @@ options %s
 	previousCmdline := []string{
 		"root=UUID=" + activeUUID,
 		"rw",
-		"systemd.mount-extra=UUID=" + varUUID + ":/var:ext4:defaults",
+		"systemd.mount-extra=UUID=" + varUUID + ":/var:" + fsType + ":defaults",
 	}
 
 	// Create/update rollback boot entry (points to previous system)
